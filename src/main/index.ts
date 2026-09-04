@@ -49,6 +49,7 @@ import {
 import { initLog, installGlobalHandlers, log, logDirectory } from './log'
 import { parseLaunchArgs } from './argv'
 import { installMenu } from './menu'
+import pkg from '../../package.json'
 import type {
   AppInfo,
   AppSettings,
@@ -75,6 +76,11 @@ if (getSettings().disableGpu) {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+/** 开发模式下 app.getVersion() 返回的是 Electron 自己的版本，用 package.json 的 */
+function appVersion(): string {
+  return app.isPackaged ? app.getVersion() : (pkg as { version: string }).version
+}
 
 /**
  * 单实例：第二次启动（比如又拖了一个文件夹到 exe 上）只是让已开的窗口
@@ -178,7 +184,7 @@ function boot(): void {
   app.whenReady().then(() => {
     initCache()
     registerHandler()
-    log.info('app', `启动 v${app.getVersion()} electron ${process.versions.electron}，数据目录 ${cacheDir()}`)
+    log.info('app', `启动 v${appVersion()} electron ${process.versions.electron}，数据目录 ${cacheDir()}`)
 
     const settings = getSettings()
     createWorkers(settings.concurrency)
@@ -405,7 +411,7 @@ ipcMain.handle('app:initialFolder', () => {
 })
 
 ipcMain.handle('app:info', (): AppInfo => ({
-  version: app.getVersion(),
+  version: appVersion(),
   electron: process.versions.electron ?? '',
   chrome: process.versions.chrome ?? '',
   node: process.versions.node ?? '',

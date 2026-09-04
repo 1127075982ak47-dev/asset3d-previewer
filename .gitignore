@@ -12,3 +12,5 @@ release/
 .testdata/
 .tmp-verify-*/
 *.log
+.verify-viewer/
+.verify-out-gltf/

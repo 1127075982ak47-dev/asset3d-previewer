@@ -1,17 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { disposeObject, loadModel } from './lib/loaders'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import ViewerPanel, { type PanelTab } from './ViewerPanel'
 import {
-  addLights,
-  computeStats,
-  createEnvironment,
-  frameObject,
-  normalizeMaterials,
-  relaxBackfaceCulling,
-  type LightingPreset
-} from './lib/framing'
-import type { ModelEntry, ModelStats } from '../shared/types'
+  DEFAULT_PREFS,
+  ViewerEngine,
+  type MaterialInfo,
+  type NodeInfo,
+  type ViewPreset,
+  type ViewerPrefs
+} from './lib/viewerEngine'
+import type { HdriEntry, LightingPreset, ModelEntry, ModelStats } from '../shared/types'
 
 interface Props {
   entries: ModelEntry[]
@@ -23,22 +20,24 @@ interface Props {
   onToggleFavorite: (entry: ModelEntry) => void
 }
 
-const BACKGROUNDS: { key: string; label: string; color: number | null }[] = [
-  { key: 'dark', label: '深灰', color: 0x14161a },
-  { key: 'mid', label: '中灰', color: 0x606060 },
-  { key: 'light', label: '浅灰', color: 0xd8dade },
-  { key: 'black', label: '纯黑', color: 0x000000 },
-  { key: 'white', label: '纯白', color: 0xffffff }
-]
+const PREFS_KEY = 'asset3d.viewerPrefs.v1'
 
-function fmtNum(n: number): string {
-  return n.toLocaleString('zh-CN')
+function loadPrefs(lighting: LightingPreset): ViewerPrefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (raw) return { ...DEFAULT_PREFS, lighting, ...(JSON.parse(raw) as Partial<ViewerPrefs>) }
+  } catch {
+    /* 坏数据就用默认 */
+  }
+  return { ...DEFAULT_PREFS, lighting }
 }
 
-function fmtDim(d: [number, number, number]): string {
-  const f = (v: number): string =>
-    v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4)
-  return `${f(d[0])} × ${f(d[1])} × ${f(d[2])}`
+function savePrefs(p: ViewerPrefs): void {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(p))
+  } catch {
+    /* 存不了就算了 */
+  }
 }
 
 export default function Viewer({
@@ -52,155 +51,94 @@ export default function Viewer({
 }: Props): JSX.Element {
   const entry = entries[index]
   const hostRef = useRef<HTMLDivElement>(null)
+  const engineRef = useRef<ViewerEngine | null>(null)
 
-  // three.js 的一整套对象放在 ref 里，避免 React 重渲染时被重建
-  const three = useRef<{
-    renderer: THREE.WebGLRenderer
-    scene: THREE.Scene
-    camera: THREE.PerspectiveCamera
-    controls: OrbitControls
-    env: THREE.Texture
-    lights: THREE.Light[]
-    grid: THREE.GridHelper
-    axes: THREE.AxesHelper
-    box: THREE.Box3Helper
-    mixer: THREE.AnimationMixer | null
-    clips: THREE.AnimationClip[]
-    action: THREE.AnimationAction | null
-    current: THREE.Object3D | null
-    raf: number
-    clock: THREE.Clock
-  } | null>(null)
-
+  const [prefs, setPrefsRaw] = useState<ViewerPrefs>(() => loadPrefs(initialLighting))
+  const [hdris, setHdris] = useState<HdriEntry[]>([])
+  const [tab, setTab] = useState<PanelTab>('display')
   const [loading, setLoading] = useState(true)
   const [loadingMsg, setLoadingMsg] = useState('正在加载…')
+  const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<ModelStats | null>(null)
-  const [wireframe, setWireframe] = useState(false)
-  const [showGrid, setShowGrid] = useState(true)
-  const [showAxes, setShowAxes] = useState(false)
-  const [showBox, setShowBox] = useState(false)
-  const [bg, setBg] = useState('dark')
-  const [lighting, setLighting] = useState<LightingPreset>(initialLighting)
-  const [progress, setProgress] = useState<number | null>(null)
-  const [clipNames, setClipNames] = useState<string[]>([])
-  const [clipIdx, setClipIdx] = useState(-1)
+  const [clips, setClips] = useState<string[]>([])
+  const [clipIdx, setClipIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
+  const [duration, setDuration] = useState(0)
+  const [hierarchy, setHierarchy] = useState<NodeInfo[]>([])
+  const [materials, setMaterials] = useState<MaterialInfo[]>([])
+  const [soloed, setSoloed] = useState<string | null>(null)
+  const [warn, setWarn] = useState<string | null>(null)
+  const [shotMenu, setShotMenu] = useState(false)
 
-  /* ---------- 初始化：整个查看器生命周期只建一次 ---------- */
+  const timeInputRef = useRef<HTMLInputElement>(null)
+  const timeLabelRef = useRef<HTMLSpanElement>(null)
+  const warnTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prefsRef = useRef(prefs)
+  prefsRef.current = prefs
+  const hdrisRef = useRef(hdris)
+  hdrisRef.current = hdris
+
+  const showWarn = useCallback((msg: string) => {
+    setWarn(msg)
+    if (warnTimer.current) clearTimeout(warnTimer.current)
+    warnTimer.current = setTimeout(() => setWarn(null), 3500)
+  }, [])
+
+  const setPrefs = useCallback((patch: Partial<ViewerPrefs>) => {
+    setPrefsRaw((prev) => {
+      const next = { ...prev, ...patch }
+      savePrefs(next)
+      return next
+    })
+  }, [])
+
+  /* ---------- 引擎：整个查看器生命周期只建一次 ---------- */
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
+    const engine = new ViewerEngine(host)
+    engineRef.current = engine
+    engine.onWarn = showWarn
+    engine.onFrame = (t, d) => {
+      if (timeInputRef.current && document.activeElement !== timeInputRef.current) {
+        timeInputRef.current.value = String(t)
+      }
+      if (timeLabelRef.current) timeLabelRef.current.textContent = `${t.toFixed(2)} / ${d.toFixed(2)}s`
+    }
+    engine.applyPrefs(prefsRef.current, hdrisRef.current, true)
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      preserveDrawingBuffer: true,
-      powerPreference: 'high-performance'
+    void window.api.hdriList().then((list) => {
+      setHdris(list)
+      engine.applyPrefs(prefsRef.current, list, true)
     })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    renderer.outputColorSpace = THREE.SRGBColorSpace
-    renderer.toneMapping = THREE.ACESFilmicToneMapping
-    host.appendChild(renderer.domElement)
-
-    const scene = new THREE.Scene()
-    const env = createEnvironment(renderer)
-    scene.environment = env
-    scene.background = new THREE.Color(0x14161a)
-
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000)
-    const controls = new OrbitControls(camera, renderer.domElement)
-    controls.enableDamping = true
-    controls.dampingFactor = 0.08
-    // 左键旋转 / 中键推拉 / 右键平移
-    controls.mouseButtons = {
-      LEFT: THREE.MOUSE.ROTATE,
-      MIDDLE: THREE.MOUSE.DOLLY,
-      RIGHT: THREE.MOUSE.PAN
-    }
-
-    const lights = addLights(scene, initialLighting)
-
-    const grid = new THREE.GridHelper(10, 20, 0x3a4050, 0x262b33)
-    scene.add(grid)
-    const axes = new THREE.AxesHelper(1)
-    axes.visible = false
-    scene.add(axes)
-    const box = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(0x4c9aff))
-    box.visible = false
-    scene.add(box)
-
-    const clock = new THREE.Clock()
-
-    three.current = {
-      renderer,
-      scene,
-      camera,
-      controls,
-      env,
-      lights,
-      grid,
-      axes,
-      box,
-      mixer: null,
-      clips: [],
-      action: null,
-      current: null,
-      raf: 0,
-      clock
-    }
-
-    const resize = (): void => {
-      const w = host.clientWidth
-      const h = host.clientHeight
-      if (w === 0 || h === 0) return
-      renderer.setSize(w, h, false)
-      camera.aspect = w / h
-      camera.updateProjectionMatrix()
-    }
-    resize()
-    const ro = new ResizeObserver(resize)
-    ro.observe(host)
-
-    const tick = (): void => {
-      const t = three.current
-      if (!t) return
-      t.raf = requestAnimationFrame(tick)
-      const dt = t.clock.getDelta()
-      if (t.mixer) t.mixer.update(dt)
-      t.controls.update()
-      t.renderer.render(t.scene, t.camera)
-    }
-    tick()
 
     return () => {
-      ro.disconnect()
-      const t = three.current
-      three.current = null
-      if (t) {
-        cancelAnimationFrame(t.raf)
-        if (t.current) disposeObject(t.current)
-        t.controls.dispose()
-        t.env.dispose()
-        t.grid.geometry.dispose()
-        ;(t.grid.material as THREE.Material).dispose()
-        t.axes.dispose()
-        t.renderer.dispose()
-        t.renderer.forceContextLoss()
-        t.renderer.domElement.remove()
-      }
+      engineRef.current = null
+      engine.dispose()
     }
-  }, [])
+  }, [showWarn])
+
+  /* ---------- 设置变化同步到引擎 ---------- */
+  useEffect(() => {
+    engineRef.current?.applyPrefs(prefs, hdris)
+  }, [prefs, hdris])
 
   /* ---------- 换模型 ---------- */
   useEffect(() => {
-    if (!entry) return
+    const engine = engineRef.current
+    if (!entry || !engine) return
     let cancelled = false
 
     setLoading(true)
     setError(null)
     setStats(null)
-    setClipNames([])
-    setClipIdx(-1)
+    setClips([])
+    setClipIdx(0)
+    setDuration(0)
+    setHierarchy([])
+    setMaterials([])
+    setSoloed(null)
     setProgress(null)
     setLoadingMsg(
       entry.ext === '.blend'
@@ -209,26 +147,10 @@ export default function Viewer({
     )
 
     void (async () => {
-      const t = three.current
-      if (!t) return
-
-      // 先卸掉上一个模型，避免两个模型同时占显存
-      if (t.current) {
-        t.scene.remove(t.current)
-        disposeObject(t.current)
-        t.current = null
-      }
-      if (t.mixer) {
-        t.mixer.stopAllAction()
-        t.mixer = null
-      }
-      t.action = null
-
       try {
         if (!entry.previewable) {
           throw new Error(
-            entry.ext +
-              ' 是私有格式，没有开源库能解析它。可以右键「用默认程序打开」，或在原软件里导出为 FBX / GLB。'
+            entry.ext + ' 是私有格式，没有开源库能解析它。可以右键「用默认程序打开」，或在原软件里导出为 FBX / GLB。'
           )
         }
         const resolved = await window.api.viewableUrl(entry)
@@ -236,61 +158,27 @@ export default function Viewer({
         if (!resolved.url) throw new Error(resolved.error ?? '无法解析模型路径')
 
         const ext = entry.ext === '.blend' ? '.glb' : entry.ext
-        const loaded = await loadModel(resolved.url, ext, t.renderer, {
-          onProgress: (l, tot) => {
-            if (!cancelled && tot > 0) setProgress(Math.round((l / tot) * 100))
-          }
+        const info = await engine.load(resolved.url, ext, (l, tot) => {
+          if (!cancelled && tot > 0) setProgress(Math.round((l / tot) * 100))
         })
-        if (cancelled) {
-          disposeObject(loaded.object)
-          return
-        }
+        if (cancelled || !info) return
 
-        normalizeMaterials(loaded.object)
-        relaxBackfaceCulling(loaded.object)
-        t.scene.add(loaded.object)
-        t.current = loaded.object
-
-        const { center, radius } = frameObject(loaded.object, t.camera)
-        t.controls.target.copy(center)
-        t.controls.minDistance = radius * 0.05
-        t.controls.maxDistance = radius * 40
-        t.controls.update()
-
-        // 地面网格和坐标轴跟着模型尺度走，不然大模型看不到网格、小模型被网格淹没
-        const gridSize = radius * 4
-        t.grid.scale.setScalar(gridSize / 10)
-        t.grid.position.set(center.x, center.y - radius, center.z)
-        t.axes.scale.setScalar(radius)
-        t.axes.position.copy(center)
-        t.box.box.setFromObject(loaded.object)
-
-        setStats(computeStats(loaded.object, loaded.animations))
-
-        if (loaded.animations.length > 0) {
-          t.clips = loaded.animations
-          t.mixer = new THREE.AnimationMixer(loaded.object)
-          setClipNames(loaded.animations.map((a, i) => a.name || `动画 ${i + 1}`))
-          setClipIdx(0)
-        } else {
-          t.clips = []
-          setClipNames([])
-        }
-
+        setStats(info.stats)
+        setClips(info.clips)
+        setPlaying(true)
+        if (info.clips.length > 0) setDuration(engine['clips'][0]?.duration ?? 0)
+        setHierarchy(engine.hierarchy())
+        setMaterials(engine.materials())
         setLoading(false)
       } catch (e) {
         if (cancelled) return
         setError(e instanceof Error ? e.message : String(e))
         setLoading(false)
-
         // 加载失败大概率是外部依赖缺失（.bin 或贴图），查一下告诉用户到底缺什么
         try {
           const dep = await window.api.dependencies(entry.path)
           if (!cancelled && dep.missing.length > 0) {
-            setError(
-              (prev) =>
-                `${prev ?? ''}\n缺少依赖文件: ${dep.missing.join(', ')}`
-            )
+            setError((prev) => `${prev ?? ''}\n缺少依赖文件: ${dep.missing.join(', ')}`)
           }
         } catch {
           /* 查不了就算了 */
@@ -303,53 +191,20 @@ export default function Viewer({
     }
   }, [entry?.id])
 
-  /* ---------- 各种开关 ---------- */
-  useEffect(() => {
-    const t = three.current
-    if (!t?.current) return
-    t.current.traverse((o) => {
-      const mat = (o as unknown as { material?: THREE.Material | THREE.Material[] })
-        .material
-      if (!mat) return
-      for (const m of Array.isArray(mat) ? mat : [mat]) {
-        const mm = m as THREE.MeshStandardMaterial
-        if ('wireframe' in mm) mm.wireframe = wireframe
-      }
-    })
-  }, [wireframe, stats])
+  /* ---------- 动画 ---------- */
+  const onClip = useCallback((i: number) => {
+    const engine = engineRef.current
+    if (!engine) return
+    setClipIdx(i)
+    engine.setClip(i, true)
+    setPlaying(true)
+    setDuration(engine['clips'][i]?.duration ?? 0)
+  }, [])
 
-  useEffect(() => {
-    const t = three.current
-    if (!t) return
-    t.grid.visible = showGrid
-    t.axes.visible = showAxes
-    t.box.visible = showBox
-  }, [showGrid, showAxes, showBox, stats])
-
-  useEffect(() => {
-    const t = three.current
-    if (!t) return
-    const c = BACKGROUNDS.find((b) => b.key === bg)
-    t.scene.background = new THREE.Color(c?.color ?? 0x14161a)
-  }, [bg])
-
-  useEffect(() => {
-    const t = three.current
-    if (!t) return
-    for (const l of t.lights) t.scene.remove(l)
-    t.lights = addLights(t.scene, lighting)
-  }, [lighting])
-
-  useEffect(() => {
-    const t = three.current
-    if (!t?.mixer || clipIdx < 0 || !t.clips[clipIdx]) return
-    t.mixer.stopAllAction()
-    const action = t.mixer.clipAction(t.clips[clipIdx])
-    action.reset()
-    action.play()
-    action.paused = !playing
-    t.action = action
-  }, [clipIdx, playing, stats])
+  const onPlay = useCallback((on: boolean) => {
+    engineRef.current?.setPlaying(on)
+    setPlaying(on)
+  }, [])
 
   /* ---------- 键盘 ---------- */
   useEffect(() => {
@@ -360,58 +215,94 @@ export default function Viewer({
         e.target instanceof HTMLTextAreaElement
       if (e.key === 'Escape') {
         e.preventDefault()
-        if (inControl) (e.target as HTMLElement).blur()
+        if (shotMenu) setShotMenu(false)
+        else if (inControl) (e.target as HTMLElement).blur()
         else onClose()
         return
       }
       if (inControl) return
-      if (e.key === 'ArrowRight') {
-        e.preventDefault()
-        if (index < entries.length - 1) onIndex(index + 1)
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault()
-        if (index > 0) onIndex(index - 1)
-      } else if (e.key === 'f' || e.key === 'F') {
-        e.preventDefault()
-        resetView()
-      } else if (e.key === 'w' || e.key === 'W') {
-        setWireframe((v) => !v)
-      } else if (e.key === 'g' || e.key === 'G') {
-        setShowGrid((v) => !v)
-      } else if (e.key === ' ') {
-        e.preventDefault()
-        setPlaying((v) => !v)
+      const engine = engineRef.current
+      switch (e.key) {
+        case 'ArrowRight':
+          e.preventDefault()
+          if (index < entries.length - 1) onIndex(index + 1)
+          break
+        case 'ArrowLeft':
+          e.preventDefault()
+          if (index > 0) onIndex(index - 1)
+          break
+        case 'f':
+        case 'F':
+          e.preventDefault()
+          engine?.resetView()
+          break
+        case 'w':
+        case 'W':
+          setPrefs({ mode: prefsRef.current.mode === 'wire' ? 'material' : 'wire' })
+          break
+        case 'g':
+        case 'G':
+          setPrefs({ grid: !prefsRef.current.grid })
+          break
+        case 'r':
+        case 'R':
+          setPrefs({ autoRotate: !prefsRef.current.autoRotate })
+          break
+        case '1':
+          engine?.setView('front')
+          break
+        case '3':
+          engine?.setView('right')
+          break
+        case '7':
+          engine?.setView('top')
+          break
+        case '5':
+          engine?.setView('iso')
+          break
+        case 'Tab':
+          e.preventDefault()
+          setPrefs({ panelOpen: !prefsRef.current.panelOpen })
+          break
+        case ' ':
+          e.preventDefault()
+          onPlay(!playing)
+          break
+        case 'd':
+        case 'D':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            if (entry) onToggleFavorite(entry)
+          }
+          break
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [index, entries.length, onIndex, onClose])
+  }, [index, entries.length, onIndex, onClose, playing, onPlay, setPrefs, shotMenu, entry, onToggleFavorite])
 
-  function resetView(): void {
-    const t = three.current
-    if (!t?.current) return
-    const { center, radius } = frameObject(t.current, t.camera)
-    t.controls.target.copy(center)
-    t.controls.minDistance = radius * 0.05
-    t.controls.maxDistance = radius * 40
-    t.controls.update()
+  /* ---------- 截图 ---------- */
+  async function screenshot(opts: { transparent?: boolean; scale?: number }): Promise<void> {
+    const engine = engineRef.current
+    if (!engine || !entry) return
+    setShotMenu(false)
+    const dataUrl = engine.screenshot(opts)
+    const suffix = opts.transparent ? '-透明' : opts.scale && opts.scale > 1 ? `-${opts.scale}x` : ''
+    await window.api.exportPng(`${entry.name}${suffix}.png`, dataUrl)
   }
 
-  async function screenshot(): Promise<void> {
-    const t = three.current
-    if (!t) return
-    t.renderer.render(t.scene, t.camera)
-    const dataUrl = t.renderer.domElement.toDataURL('image/png')
-    await window.api.exportPng(`${entry?.name ?? 'model'}.png`, dataUrl)
-  }
+  const onView = useCallback((p: ViewPreset) => engineRef.current?.setView(p), [])
 
   if (!entry) return <></>
+  const isFav = favorites.has(entry.path.toLowerCase())
 
   return (
     <div className="viewer">
       <div className="vtop">
         <button onClick={onClose}>← 返回 (Esc)</button>
-        <span className="title">{entry.name}</span>
+        <span className="title" title={entry.rel}>
+          {entry.name}
+        </span>
         <span className="idx">
           {index + 1} / {entries.length} · {entry.ext.slice(1).toUpperCase()}
         </span>
@@ -421,133 +312,123 @@ export default function Viewer({
         <button onClick={() => onIndex(index - 1)} disabled={index <= 0}>
           ← 上一个
         </button>
-        <button
-          onClick={() => onIndex(index + 1)}
-          disabled={index >= entries.length - 1}
-        >
+        <button onClick={() => onIndex(index + 1)} disabled={index >= entries.length - 1}>
           下一个 →
         </button>
-        <button onClick={resetView}>重置视角 (F)</button>
+        <span className="vsep" />
         <button
-          className={wireframe ? 'primary' : ''}
-          onClick={() => setWireframe((v) => !v)}
-        >
-          线框 (W)
-        </button>
-        <button className={showGrid ? 'primary' : ''} onClick={() => setShowGrid((v) => !v)}>
-          网格 (G)
-        </button>
-        <button className={showAxes ? 'primary' : ''} onClick={() => setShowAxes((v) => !v)}>
-          坐标轴
-        </button>
-        <button className={showBox ? 'primary' : ''} onClick={() => setShowBox((v) => !v)}>
-          包围盒
-        </button>
-
-        <select value={lighting} onChange={(e) => setLighting(e.target.value as LightingPreset)}>
-          <option value="studio">影棚光</option>
-          <option value="outdoor">室外光</option>
-          <option value="neutral">中性光</option>
-        </select>
-
-        <select value={bg} onChange={(e) => setBg(e.target.value)}>
-          {BACKGROUNDS.map((b) => (
-            <option key={b.key} value={b.key}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-
-        <button onClick={() => void screenshot()}>导出截图</button>
-        <button onClick={() => void window.api.showItem(entry.path)}>定位文件</button>
-        <button
-          className={favorites.has(entry.path.toLowerCase()) ? 'primary' : ''}
+          className={isFav ? 'primary' : ''}
           onClick={() => onToggleFavorite(entry)}
           title="收藏 (Ctrl+D)"
         >
-          {favorites.has(entry.path.toLowerCase()) ? '★' : '☆'}
+          {isFav ? '★' : '☆'}
+        </button>
+        <div className="shot-wrap">
+          <button onClick={() => setShotMenu((v) => !v)} disabled={loading || !!error}>
+            导出截图 ▾
+          </button>
+          {shotMenu && (
+            <div className="shot-menu" onMouseLeave={() => setShotMenu(false)}>
+              <button onClick={() => void screenshot({})}>当前视图</button>
+              <button onClick={() => void screenshot({ scale: 2 })}>2 倍分辨率</button>
+              <button onClick={() => void screenshot({ transparent: true })}>透明背景</button>
+              <button onClick={() => void screenshot({ transparent: true, scale: 2 })}>透明 · 2 倍</button>
+            </div>
+          )}
+        </div>
+        <button onClick={() => void window.api.showItem(entry.path)}>定位文件</button>
+        <button
+          className={prefs.panelOpen ? 'on' : ''}
+          onClick={() => setPrefs({ panelOpen: !prefs.panelOpen })}
+          title="显示 / 隐藏面板 (Tab)"
+        >
+          面板
         </button>
       </div>
 
-      <div className="stage" ref={hostRef}>
-        {loading && (
-          <div className="loading">
-            <span className="spinner" />
-            <span>
-              {loadingMsg}
-              {progress !== null && progress < 100 ? ' ' + progress + '%' : ''}
-            </span>
-          </div>
-        )}
+      <div className="vbody">
+        <div
+          className="stage"
+          ref={hostRef}
+          onDoubleClick={(e) => {
+            if (e.target === engineRef.current?.renderer.domElement) engineRef.current?.resetView()
+          }}
+        >
+          {loading && (
+            <div className="loading">
+              <span className="spinner" />
+              <span>
+                {loadingMsg}
+                {progress !== null && progress < 100 ? ' ' + progress + '%' : ''}
+              </span>
+            </div>
+          )}
 
-        {error && !loading && (
-          <div className="verror">
-            <div style={{ fontSize: 30 }}>⚠</div>
-            <div>无法加载该模型</div>
-            <div className="detail">{error}</div>
-          </div>
-        )}
+          {error && !loading && (
+            <div className="verror">
+              <div style={{ fontSize: 30 }}>⚠</div>
+              <div>无法加载该模型</div>
+              <div className="detail">{error}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button onClick={() => void window.api.openPath(entry.path)}>用默认程序打开</button>
+                <button onClick={() => void window.api.showItem(entry.path)}>定位文件</button>
+              </div>
+            </div>
+          )}
 
-        {stats && !loading && !error && (
-          <div className="panel">
-            <h4>模型信息</h4>
-            <div className="row">
-              <span>顶点</span>
-              <b>{fmtNum(stats.vertices)}</b>
+          {!loading && !error && (
+            <div className="hud">
+              左键旋转 · 滚轮缩放 · 右键平移 · 双击重置
+              <br />
+              ← → 切换 · F 重置 · W 线框 · R 旋转 · 1/3/7/5 视角 · Tab 面板
             </div>
-            <div className="row">
-              <span>三角面</span>
-              <b>{fmtNum(stats.triangles)}</b>
-            </div>
-            <div className="row">
-              <span>网格</span>
-              <b>{fmtNum(stats.meshes)}</b>
-            </div>
-            <div className="row">
-              <span>材质</span>
-              <b>{fmtNum(stats.materials)}</b>
-            </div>
-            <div className="row">
-              <span>贴图</span>
-              <b>{fmtNum(stats.textures)}</b>
-            </div>
-            <div className="row">
-              <span>动画</span>
-              <b>{stats.animations.length}</b>
-            </div>
-            <div className="row">
-              <span>尺寸</span>
-              <b style={{ fontSize: 11 }}>{fmtDim(stats.dimensions)}</b>
-            </div>
-          </div>
-        )}
+          )}
 
-        {!loading && !error && (
-          <div className="hud">
-            左键拖拽 = 旋转 · 滚轮 = 缩放 · 右键拖拽 = 平移
-            <br />
-            ← → 切换模型 · F 重置 · W 线框 · Esc 返回
-          </div>
+          {warn && <div className="vwarn">{warn}</div>}
+        </div>
+
+        {prefs.panelOpen && (
+          <ViewerPanel
+            entry={entry}
+            prefs={prefs}
+            onPrefs={setPrefs}
+            hdris={hdris}
+            onImportHdri={() => void window.api.hdriImport().then(setHdris)}
+            onRemoveHdri={(id) => {
+              void window.api.hdriRemove(id).then((list) => {
+                setHdris(list)
+                if (prefsRef.current.envId === id) setPrefs({ envId: 'room' })
+              })
+            }}
+            onOpenHdriDir={() => void window.api.hdriOpenDir()}
+            stats={stats}
+            clips={clips}
+            clipIdx={clipIdx}
+            playing={playing}
+            duration={duration}
+            onClip={onClip}
+            onPlay={onPlay}
+            onSeek={(t) => engineRef.current?.seek(t)}
+            timeInputRef={timeInputRef}
+            timeLabelRef={timeLabelRef}
+            hierarchy={hierarchy}
+            soloed={soloed}
+            onNodeVisible={(uuid, v) => {
+              engineRef.current?.setNodeVisible(uuid, v)
+              setHierarchy((h) => h.map((n) => (n.uuid === uuid ? { ...n, visible: v } : n)))
+            }}
+            onSolo={(uuid) => {
+              engineRef.current?.solo(uuid)
+              setSoloed(uuid)
+              setHierarchy(engineRef.current?.hierarchy() ?? [])
+            }}
+            materials={materials}
+            onView={onView}
+            tab={tab}
+            onTab={setTab}
+          />
         )}
       </div>
-
-      {clipNames.length > 0 && (
-        <div className="anim-bar">
-          <button onClick={() => setPlaying((v) => !v)}>
-            {playing ? '⏸ 暂停' : '▶ 播放'}
-          </button>
-          <select value={clipIdx} onChange={(e) => setClipIdx(Number(e.target.value))}>
-            {clipNames.map((n, i) => (
-              <option key={i} value={i}>
-                {n}
-              </option>
-            ))}
-          </select>
-          <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>
-            共 {clipNames.length} 段动画 · 空格键播放/暂停
-          </span>
-        </div>
-      )}
     </div>
   )
 }

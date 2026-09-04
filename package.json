@@ -8,9 +8,15 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "pack": "electron-vite build && electron-builder --dir",
-    "dist": "electron-vite build && electron-builder",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "pack": "electron-vite build && electron-builder",
+    "release": "npm run typecheck && npm run test && npm run pack && node scripts/make-release.mjs",
+    "verify:render": "electron scripts/verify-render.cjs",
+    "verify:ui": "electron scripts/verify-ui.cjs",
+    "verify:viewer": "electron scripts/verify-viewer.cjs",
+    "verify:drag": "electron scripts/verify-drag.cjs",
+    "verify:blend": "node scripts/verify-blend.mjs"
   },
   "dependencies": {
     "fzstd": "^0.1.1",
@@ -30,6 +36,7 @@
     "react-dom": "^18.3.1",
     "three": "^0.171.0",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   }
 }
