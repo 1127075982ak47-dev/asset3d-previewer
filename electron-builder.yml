@@ -1,0 +1,36 @@
+appId: com.asset3d.previewer
+productName: 3D资源预览器
+copyright: MIT Licensed
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+
+# DRACO / KTX2 解码器必须解包到磁盘，asar 内的文件无法被 fetch 的 file:// 直接读取
+asar: true
+asarUnpack:
+  - out/renderer/decoders/**/*
+
+extraResources:
+  - from: node_modules/three/examples/jsm/libs/draco/
+    to: decoders/draco/
+  - from: node_modules/three/examples/jsm/libs/basis/
+    to: decoders/basis/
+  # Blender 无头导出脚本，必须是磁盘上的真实文件（-P 读不了 asar 里的）
+  - from: resources/blender_export_glb.py
+    to: blender_export_glb.py
+
+win:
+  icon: build/icon.ico
+  # dir target = win-unpacked 文件夹，解压即用的真绿色版
+  # 不用 portable（自解压 exe 每次启动都往 temp 释放，慢且不干净）
+  target:
+    - target: dir
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+compression: maximum

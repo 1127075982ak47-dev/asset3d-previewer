@@ -1,0 +1,14 @@
+node_modules/
+out/
+release/
+.dev-data/
+.verify-out/
+.verify-out-fbx/
+.verify-basic-fbx/
+.verify-basic-gltf/
+.verify-clamp-fbx/
+.verify-blend/
+.verify-ui/
+.testdata/
+.tmp-verify-*/
+*.log
