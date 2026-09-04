@@ -67,6 +67,15 @@ const inflight = new Map<number, Job>()
 const pending = new Map<string, Promise<ThumbResult>>()
 
 let onProgress: ((r: ThumbResult) => void) | null = null
+/** 查看器打开时暂停出图：三个隐藏窗口全速出图会和查看器抢 GPU */
+let paused = false
+
+export function setPaused(p: boolean): void {
+  if (paused === p) return
+  paused = p
+  log.debug('thumb', p ? '出图暂停' : '出图恢复')
+  if (!p) pump()
+}
 
 export function setProgressListener(fn: (r: ThumbResult) => void): void {
   onProgress = fn
@@ -267,6 +276,7 @@ function finish(job: Job, r: ThumbResult): void {
 }
 
 function pump(): void {
+  if (paused) return
   for (const w of workers) {
     if (!w.ready || w.busy || w.win.isDestroyed()) continue
 

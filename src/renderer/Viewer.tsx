@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import ViewerPanel, { type PanelTab } from './ViewerPanel'
 import {
   DEFAULT_PREFS,
@@ -41,7 +41,7 @@ function savePrefs(p: ViewerPrefs): void {
   }
 }
 
-export default function Viewer({
+function Viewer({
   entries,
   index,
   onIndex,
@@ -437,3 +437,6 @@ export default function Viewer({
     </div>
   )
 }
+
+/** memo：后台出图结果会让 App 频繁重渲染，查看器不该跟着一起重画 */
+export default memo(Viewer)

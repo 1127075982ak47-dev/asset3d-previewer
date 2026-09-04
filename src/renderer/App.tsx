@@ -124,6 +124,8 @@ export default function App(): JSX.Element {
   const [folderChanged, setFolderChanged] = useState(false)
   const [lib, setLib] = useState<Lib>(EMPTY_LIB)
   const [sidebarVisible, setSidebarVisible] = useState(true)
+  /** 检测到 WebGL 跑在 CPU 软件渲染器上时的渲染器名 */
+  const [softwareGl, setSoftwareGl] = useState<string | null>(null)
   const [toast, setToastRaw] = useState<Toast | null>(null)
 
   const searchRef = useRef<HTMLInputElement>(null)
@@ -169,6 +171,25 @@ export default function App(): JSX.Element {
   useEffect(() => {
     document.title = root ? `${basename(root)} - 3D 资源预览器` : '3D 资源预览器'
   }, [root])
+
+  // 关掉 GPU 加速（或显卡驱动不可用）时 WebGL 会落到 SwiftShader 软件渲染，
+  // 3D 会卡成幻灯片。用户往往不知道是这个原因，明确提示出来。
+  useEffect(() => {
+    try {
+      const c = document.createElement('canvas')
+      const gl = (c.getContext('webgl2') ?? c.getContext('webgl')) as WebGLRenderingContext | null
+      if (!gl) {
+        setSoftwareGl('无 WebGL')
+        return
+      }
+      const ext = gl.getExtension('WEBGL_debug_renderer_info')
+      const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER))
+      if (/swiftshader|llvmpipe|software|microsoft basic render/i.test(name)) setSoftwareGl(name)
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+    } catch {
+      /* 检测不了就算了 */
+    }
+  }, [])
 
   const thumbReq = useCallback((priority: number): ThumbRequest => {
     const s = settingsRef.current
@@ -286,6 +307,10 @@ export default function App(): JSX.Element {
   )
 
   useEffect(() => window.api.onScanProgress((p) => setScanProgress(p)), [])
+  // 查看器打开时暂停后台出图；关掉后恢复
+  useEffect(() => {
+    void window.api.pauseThumbs(viewerIdx !== null)
+  }, [viewerIdx])
   useEffect(() => window.api.onOpenFolder((dir) => void openFolder(dir)), [openFolder])
   useEffect(() => window.api.onFolderChanged(() => setFolderChanged(true)), [])
 
@@ -692,6 +717,9 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedIds, entries, viewerIdx, focusedIndex, modalOpen, ctx, toggleFavorite, selectedEntries])
 
+  const closeViewer = useCallback(() => setViewerIdx(null), [])
+  const toggleFavoriteOne = useCallback((e: ModelEntry) => void toggleFavorite([e]), [toggleFavorite])
+
   const hasBlend = useMemo(
     () => (scan?.entries ?? []).some((e) => e.ext === '.blend'),
     [scan]
@@ -776,6 +804,19 @@ export default function App(): JSX.Element {
           <IconSettings /> 设置
         </button>
       </div>
+
+      {softwareGl && (
+        <div className="banner warn">
+          ⚠ 当前 3D 由 CPU 软件渲染（{softwareGl}），出图和查看器都会非常慢。
+          {settings?.disableGpu
+            ? ' 你在设置里关闭了 GPU 硬件加速，'
+            : ' 显卡驱动可能不可用，请更新显卡驱动；也可以'}
+          <span className="link" onClick={() => setShowSettings(true)}>
+            打开设置
+          </span>
+          {settings?.disableGpu ? ' 重新勾选「GPU 硬件加速」并重启程序。' : ' 检查「GPU 硬件加速」是否开启。'}
+        </div>
+      )}
 
       {scan && scan.entries.length > 0 && (
         <div className="toolbar chips">
@@ -1130,10 +1171,10 @@ export default function App(): JSX.Element {
           entries={entries}
           index={viewerIdx}
           onIndex={setViewerIdx}
-          onClose={() => setViewerIdx(null)}
+          onClose={closeViewer}
           lighting={settings?.lighting ?? 'studio'}
           favorites={lib.favorites}
-          onToggleFavorite={(e) => void toggleFavorite([e])}
+          onToggleFavorite={toggleFavoriteOne}
         />
       )}
 

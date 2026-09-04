@@ -271,14 +271,18 @@ export default function Settings({
         </div>
 
         <div className="field">
-          <label>关闭 GPU 加速</label>
+          <label>GPU 硬件加速</label>
           <div className="ctl">
             <input
               type="checkbox"
-              checked={local.disableGpu}
-              onChange={(e) => patch({ disableGpu: e.target.checked })}
+              checked={!local.disableGpu}
+              onChange={(e) => patch({ disableGpu: !e.target.checked })}
             />
-            {note('显卡驱动有问题、缩略图全部失败时可以试试；改动后需重启程序')}
+            <span style={{ color: local.disableGpu ? 'var(--warn)' : 'var(--fg-faint)', fontSize: 12 }}>
+              {local.disableGpu
+                ? '已关闭：3D 全部由 CPU 软件渲染，会非常卡。只在显卡驱动异常导致花屏 / 崩溃时才关闭；改动后需重启'
+                : '推荐开启。关闭后 3D 全部由 CPU 软件渲染，会非常卡；改动后需重启程序'}
+            </span>
           </div>
         </div>
 

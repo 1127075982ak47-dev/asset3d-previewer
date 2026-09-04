@@ -104,6 +104,8 @@ export interface LoadedInfo {
   clips: string[]
 }
 
+class HdriNotReady extends Error {}
+
 interface EnvCacheEntry {
   env: THREE.Texture
   equirect: THREE.Texture | null
@@ -164,6 +166,11 @@ export class ViewerEngine {
   private prefs: ViewerPrefs = { ...DEFAULT_PREFS }
   private hdris: HdriEntry[] = []
   private shadowOpacity = 0.75
+  private basePixelRatio = 1
+  /** 还要画几帧。静止时不重绘，省 GPU；任何状态变化都把它拨上去 */
+  private dirty = 3
+  private shadowDirty = true
+  private idleFrames = 0
   private soloed: string | null = null
   private hiddenBySolo: THREE.Object3D[] = []
   private disposed = false
@@ -173,17 +180,22 @@ export class ViewerEngine {
 
   constructor(host: HTMLElement) {
     this.host = host
+    // 不用 preserveDrawingBuffer：截图是「渲染完立刻同步读」，不需要它，
+    // 开着会让每帧多一次拷贝
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
       powerPreference: 'high-performance'
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    this.basePixelRatio = Math.min(window.devicePixelRatio, 1.5)
+    this.renderer.setPixelRatio(this.basePixelRatio)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.shadowMap.enabled = false
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // 阴影贴图只在模型 / 光 / 动画变化时重画，不是每帧
+    this.renderer.shadowMap.autoUpdate = false
     host.appendChild(this.renderer.domElement)
 
     this.pmrem = new THREE.PMREMGenerator(this.renderer)
@@ -230,21 +242,50 @@ export class ViewerEngine {
     this.updateOrthoFrustum()
     this.composer?.setSize(w, h)
     this.gtao?.setSize(w, h)
+    this.invalidate()
+  }
+
+  /** 让接下来几帧重绘。异步的贴图 / 环境加载完成也要调它 */
+  invalidate(frames = 2): void {
+    this.dirty = Math.max(this.dirty, frames)
   }
 
   private tick = (): void => {
     if (this.disposed) return
     this.raf = requestAnimationFrame(this.tick)
     const dt = this.clock.getDelta()
-    if (this.mixer) {
+    const animating = !!(this.mixer && this.action && !this.action.paused)
+    if (this.mixer && animating) {
       this.mixer.update(dt)
       if (this.action && this.onFrame) {
         const clip = this.action.getClip()
         this.onFrame(this.action.time, clip.duration)
       }
+      this.shadowDirty = true
     }
-    this.controls.update()
-    this.render()
+    // OrbitControls.update 在相机真的动了时返回 true（含阻尼余量）
+    const moved = this.controls.update()
+    if (this.shadowDirty) {
+      this.renderer.shadowMap.needsUpdate = true
+      this.shadowDirty = false
+      this.dirty = Math.max(this.dirty, 1)
+    }
+    // 静止时不重绘；每秒兜底画一帧，防止漏掉某个异步更新
+    this.idleFrames++
+    if (moved || animating || this.controls.autoRotate || this.dirty > 0 || this.idleFrames % 60 === 0) {
+      this.render()
+      if (this.dirty > 0) this.dirty--
+    }
+  }
+
+  private applyPixelRatio(): void {
+    // AO 是全屏后处理，按 1.5 倍像素比跑在大窗口上会卡成幻灯片
+    const pr = this.prefs.ao ? 1 : this.basePixelRatio
+    if (this.renderer.getPixelRatio() !== pr) {
+      this.renderer.setPixelRatio(pr)
+      this.composer?.setPixelRatio(pr)
+      this.resize()
+    }
   }
 
   private render(): void {
@@ -325,6 +366,8 @@ export class ViewerEngine {
 
     this.frame()
     this.applyPrefs(this.prefs, this.hdris, true)
+    this.shadowDirty = true
+    this.invalidate(3)
 
     if (loaded.animations.length > 0) {
       this.clips = loaded.animations
@@ -375,6 +418,7 @@ export class ViewerEngine {
     this.controls.maxDistance = radius * 40
     this.syncOrthoFromPersp()
     this.controls.update()
+    this.invalidate()
   }
 
   setView(preset: ViewPreset): void {
@@ -402,6 +446,7 @@ export class ViewerEngine {
     this.controls.target.copy(this.center)
     this.syncOrthoFromPersp()
     this.controls.update()
+    this.invalidate()
   }
 
   /* ------------------------------ 相机 ------------------------------ */
@@ -458,7 +503,9 @@ export class ViewerEngine {
       entry = { env, equirect: null }
     } else {
       const h = this.hdris.find((x) => x.id === id)
-      if (!h) throw new Error('找不到这张 HDRI')
+      // 列表还没从主进程回来时先静默用程序化房间，列表到了会再应用一次
+      if (!h && this.hdris.length === 0) throw new HdriNotReady()
+      if (!h) throw new Error('找不到这张 HDRI（文件可能已被删除）')
       const isExr = /\.exr$/i.test(h.url)
       const tex = isExr
         ? await new EXRLoader().loadAsync(h.url)
@@ -478,7 +525,9 @@ export class ViewerEngine {
     try {
       entry = await this.getEnv(p.envId)
     } catch (e) {
-      this.onWarn?.(`环境贴图加载失败: ${e instanceof Error ? e.message : String(e)}`)
+      if (!(e instanceof HdriNotReady)) {
+        this.onWarn?.(`环境贴图加载失败: ${e instanceof Error ? e.message : String(e)}`)
+      }
       entry = await this.getEnv('room')
     }
     if (token !== this.envToken || this.disposed) return
@@ -486,6 +535,7 @@ export class ViewerEngine {
     this.scene.environmentIntensity = p.envIntensity
     this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(p.envRotation), 0)
     this.applyBackground(p, entry)
+    this.invalidate()
   }
 
   private applyBackground(p: ViewerPrefs, entry?: EnvCacheEntry): void {
@@ -580,7 +630,7 @@ export class ViewerEngine {
     }
     this.ground.scale.setScalar(r * 10)
     this.ground.position.set(this.center.x, this.bottomY - r * 0.002, this.center.z)
-    this.renderer.shadowMap.needsUpdate = true
+    this.shadowDirty = true
   }
 
   /* ------------------------------ 后处理 ------------------------------ */
@@ -607,11 +657,11 @@ export class ViewerEngine {
       distanceExponent: 1,
       thickness: 1,
       scale: 1,
-      samples: 16,
+      samples: 8,
       distanceFallOff: 1,
       screenSpaceRadius: false
     })
-    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 16 })
+    this.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 3, radiusExponent: 1, rings: 2, samples: 8 })
   }
 
   /* ------------------------------ 设置应用 ------------------------------ */
@@ -621,7 +671,10 @@ export class ViewerEngine {
     this.prefs = { ...p }
     this.hdris = hdris
 
-    if (force || prev.lighting !== p.lighting) this.applyLighting(p.lighting)
+    if (force || prev.lighting !== p.lighting) {
+      this.applyLighting(p.lighting)
+      this.shadowDirty = true
+    }
     if (
       force ||
       prev.envId !== p.envId ||
@@ -640,6 +693,7 @@ export class ViewerEngine {
     }
     if (force || prev.shadow !== p.shadow) this.updateShadowRig()
     if (p.ao) this.ensureComposer()
+    this.applyPixelRatio()
     this.grid.visible = p.grid
     this.axes.visible = p.axes
     this.box.visible = p.bbox && !!this.current
@@ -656,6 +710,8 @@ export class ViewerEngine {
       this.action.setLoop(p.animLoop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity)
       this.action.clampWhenFinished = !p.animLoop
     }
+    this.shadowDirty = this.shadowDirty || prev.mode !== p.mode || prev.flat !== p.flat || prev.wireOverlay !== p.wireOverlay
+    this.invalidate(3)
   }
 
   /* ------------------------------ 动画 ------------------------------ */
@@ -670,6 +726,8 @@ export class ViewerEngine {
     action.play()
     action.paused = !play
     this.action = action
+    this.shadowDirty = true
+    this.invalidate()
   }
 
   setPlaying(on: boolean): void {
@@ -679,12 +737,15 @@ export class ViewerEngine {
       this.action.play()
     }
     this.action.paused = !on
+    this.invalidate()
   }
 
   seek(t: number): void {
     if (!this.action || !this.mixer) return
     this.action.time = t
     this.mixer.update(0)
+    this.shadowDirty = true
+    this.invalidate()
   }
 
   /* ------------------------------ 结构 / 材质 ------------------------------ */
@@ -716,6 +777,8 @@ export class ViewerEngine {
   setNodeVisible(uuid: string, visible: boolean): void {
     const o = this.current?.getObjectByProperty('uuid', uuid)
     if (o) o.visible = visible
+    this.shadowDirty = true
+    this.invalidate()
   }
 
   /** 只显示某个节点（及其子树）；传 null 还原 */
@@ -740,6 +803,8 @@ export class ViewerEngine {
         this.hiddenBySolo.push(o)
       }
     })
+    this.shadowDirty = true
+    this.invalidate()
   }
 
   soloedUuid(): string | null {
@@ -801,6 +866,7 @@ export class ViewerEngine {
     this.renderer.setPixelRatio(prevPixelRatio)
     this.renderer.setSize(w, h, false)
     this.composer?.setSize(w, h)
+    this.invalidate()
     return url
   }
 }

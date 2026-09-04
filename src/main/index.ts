@@ -43,6 +43,7 @@ import {
   requestGlbExport,
   requestThumb,
   resolveViewableUrl,
+  setPaused,
   setProgressListener,
   setVisible
 } from './thumbnailer'
@@ -345,6 +346,11 @@ ipcMain.handle('thumb:setVisible', (_e, ids: string[]) => {
 
 ipcMain.handle('thumb:invalidate', async (_e, entry: ModelEntry, req: ThumbRequest) => {
   await invalidateThumb(entry, req)
+  return true
+})
+
+ipcMain.handle('thumb:pause', (_e, p: boolean) => {
+  setPaused(!!p)
   return true
 })
 

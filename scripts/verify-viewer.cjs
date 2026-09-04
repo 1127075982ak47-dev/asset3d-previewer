@@ -146,6 +146,19 @@ app.whenReady().then(async () => {
   await sleep(2000)
   await step('next-loaded', 'true')
 
+  // 关掉查看器后后台出图要恢复：网格上不该有一直转圈的卡片
+  await step('close-viewer', `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+  let resumed = false
+  for (let i = 0; i < 40; i++) {
+    await sleep(500)
+    const st = await js(`({ viewer: !!document.querySelector('.viewer'), spinners: document.querySelectorAll('.card .spinner').length, imgs: document.querySelectorAll('.card .thumb img').length })`)
+    if (!st.viewer && st.spinners === 0 && st.imgs > 0) {
+      resumed = true
+      break
+    }
+  }
+  console.log('关闭查看器后出图恢复:', resumed)
+
   const failed = results.filter((r) => !r.ok)
   console.log('='.repeat(64))
   console.log(`步骤 ${results.length}，失败 ${failed.length}，面板隐藏生效: ${panelHidden}，节点 ${nodes} 材质 ${mats}`)
@@ -154,7 +167,7 @@ app.whenReady().then(async () => {
     console.log('渲染进程报错:')
     for (const e of errors) console.log('  -', e.slice(0, 300))
   }
-  const ok = failed.length === 0 && panelHidden && nodes > 0 && mats > 0
+  const ok = failed.length === 0 && panelHidden && nodes > 0 && mats > 0 && resumed
   console.log(ok ? '通过' : '有问题')
   app.exit(ok ? 0 : 1)
 })

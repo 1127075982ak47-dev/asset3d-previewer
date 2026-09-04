@@ -193,6 +193,12 @@ export function normalizeMaterials(root: THREE.Object3D): void {
       if (done) return done
 
       const src = m as THREE.MeshPhongMaterial
+      // FBX 的 TransparencyFactor 语义在各家导出器之间是反的，three.js 照单全收后
+      // Quaternius / 部分 Blender 导出的整套模型 opacity 全是 0 —— 模型完全透明，
+      // 只剩地面上一片影子。预览里一个完全不可见的材质没有任何意义，一律当不透明。
+      const rawOpacity = typeof src.opacity === 'number' ? src.opacity : 1
+      const opacity = rawOpacity <= 0.01 ? 1 : rawOpacity
+      const transparent = opacity < 1 || !!src.alphaMap
       // Phong 的 shininess 换算成 PBR 粗糙度的经验公式
       const shininess = typeof src.shininess === 'number' ? src.shininess : 30
       const roughness = THREE.MathUtils.clamp(
@@ -223,8 +229,8 @@ export function normalizeMaterials(root: THREE.Object3D): void {
           : new THREE.Color(0x000000),
         metalness: 0,
         roughness,
-        transparent: src.transparent,
-        opacity: src.opacity,
+        transparent,
+        opacity,
         alphaTest: src.alphaTest,
         side: src.side,
         flatShading: src.flatShading,

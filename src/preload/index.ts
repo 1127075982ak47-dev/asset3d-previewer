@@ -45,6 +45,8 @@ const api = {
   invalidateThumb: (entry: ModelEntry, req: ThumbRequest): Promise<boolean> =>
     ipcRenderer.invoke('thumb:invalidate', entry, req),
   cancelPendingThumbs: (): Promise<boolean> => ipcRenderer.invoke('thumb:cancelPending'),
+  /** 查看器打开时暂停后台出图，别和查看器抢 GPU */
+  pauseThumbs: (p: boolean): Promise<boolean> => ipcRenderer.invoke('thumb:pause', p),
   onThumbProgress: (cb: (r: ThumbResult) => void): (() => void) => on('thumb:progress', cb),
 
   viewableUrl: (

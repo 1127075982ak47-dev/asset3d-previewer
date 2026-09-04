@@ -1343,3 +1343,20 @@ button.icon-only {
   display: block;
   min-height: 0;
 }
+
+.banner {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.banner.warn {
+  background: #4a3414;
+  color: #ffd27a;
+  border-bottom-color: #7a5a1e;
+}
+.banner .link {
+  color: #fff;
+  text-decoration: underline;
+  cursor: pointer;
+  margin: 0 2px;
+}
