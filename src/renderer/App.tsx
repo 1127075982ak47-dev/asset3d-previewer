@@ -10,6 +10,7 @@ import AboutDialog from './AboutDialog'
 import ShortcutsDialog from './ShortcutsDialog'
 import { buildTree, isUnderDir } from './lib/tree'
 import { SHEET_MAX_ITEMS, renderContactSheet } from './lib/contactSheet'
+import { IconFolder, IconRefresh, IconSettings, IconSidebar, IconSort } from './icons'
 import type { Api } from '../preload'
 import type {
   AppSettings,
@@ -709,15 +710,15 @@ export default function App(): JSX.Element {
     <div className="app">
       <div className="toolbar">
         <button className="primary" onClick={() => void openFolder()} title="Ctrl+O">
-          打开文件夹
+          <IconFolder /> 打开文件夹
         </button>
         {root && (
           <>
             <button onClick={() => void openFolder(root)} disabled={scanning} title="F5">
-              重新扫描
+              <IconRefresh /> 重新扫描
             </button>
             <button
-              className={sidebarVisible ? 'on' : ''}
+              className={`icon-only${sidebarVisible ? ' on' : ''}`}
               onClick={() =>
                 setSidebarVisible((v) => {
                   void window.api.saveSettings({ sidebarVisible: !v })
@@ -726,7 +727,7 @@ export default function App(): JSX.Element {
               }
               title="文件夹侧栏 (Ctrl+B)"
             >
-              ☰
+              <IconSidebar />
             </button>
             <span className="path" title={root}>
               {root}
@@ -753,10 +754,11 @@ export default function App(): JSX.Element {
           <option value="tris">按面数</option>
         </select>
         <button
+          className="icon-only"
           onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
           title={sortDir === 'asc' ? '升序，点击切换为降序' : '降序，点击切换为升序'}
         >
-          {sortDir === 'asc' ? '↑' : '↓'}
+          <IconSort desc={sortDir === 'desc'} />
         </button>
 
         <input
@@ -771,7 +773,7 @@ export default function App(): JSX.Element {
         />
 
         <button onClick={() => setShowSettings(true)} title="Ctrl+,">
-          设置
+          <IconSettings /> 设置
         </button>
       </div>
 

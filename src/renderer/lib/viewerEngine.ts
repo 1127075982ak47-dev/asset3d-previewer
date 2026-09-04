@@ -163,6 +163,7 @@ export class ViewerEngine {
   private loadToken = 0
   private prefs: ViewerPrefs = { ...DEFAULT_PREFS }
   private hdris: HdriEntry[] = []
+  private shadowOpacity = 0.75
   private soloed: string | null = null
   private hiddenBySolo: THREE.Object3D[] = []
   private disposed = false
@@ -214,6 +215,7 @@ export class ViewerEngine {
     this.ro.observe(host)
     this.resize()
     this.tick()
+    if (import.meta.env.DEV) (window as unknown as { __engine?: ViewerEngine }).__engine = this
   }
 
   /* ------------------------------ 生命周期 ------------------------------ */
@@ -488,6 +490,7 @@ export class ViewerEngine {
 
   private applyBackground(p: ViewerPrefs, entry?: EnvCacheEntry): void {
     const e = entry ?? this.envCache.get(p.envId)
+    let lum = 0.5
     if (p.envVisible && e?.equirect) {
       this.scene.background = e.equirect
       this.scene.backgroundBlurriness = p.envBlur
@@ -496,21 +499,51 @@ export class ViewerEngine {
     } else {
       const c = BACKGROUNDS.find((b) => b.key === p.bg)?.color ?? 0x14161a
       this.scene.background = new THREE.Color(c)
+      const col = new THREE.Color(c)
+      lum = 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b
     }
+    // 阴影是往背景上叠黑：深色背景上 0.3 的黑几乎看不见，得加重；浅色背景上反之
+    this.shadowOpacity = lum < 0.2 ? 0.75 : lum < 0.6 ? 0.5 : 0.35
+    if (this.ground) (this.ground.material as THREE.ShadowMaterial).opacity = this.shadowOpacity
   }
 
   private applyLighting(preset: LightingPreset | 'none'): void {
     for (const l of this.lights) this.scene.remove(l)
     this.lights = preset === 'none' ? [] : addLights(this.scene, preset)
-    this.shadowLight = (this.lights.find((l) => (l as THREE.DirectionalLight).isDirectionalLight) as
-      | THREE.DirectionalLight
-      | undefined) ?? null
     this.updateShadowRig()
   }
 
+  /**
+   * 地面阴影用一盏独立的光，从左后上方打下来。
+   * 不能借用预设里的主光：影棚主光的方向和默认相机几乎重合，
+   * 阴影正好落在模型背后，开了跟没开一样。
+   */
   private updateShadowRig(): void {
     const on = this.prefs.shadow && !!this.current
-    this.renderer.shadowMap.enabled = on
+    if (on && !this.shadowLight) {
+      const l = new THREE.DirectionalLight(0xffffff, 0.7)
+      l.name = '__shadow_light'
+      this.shadowLight = l
+    }
+    if (this.shadowLight) {
+      if (on && !this.shadowLight.parent) {
+        this.scene.add(this.shadowLight)
+        this.scene.add(this.shadowLight.target)
+      } else if (!on && this.shadowLight.parent) {
+        this.scene.remove(this.shadowLight)
+        this.scene.remove(this.shadowLight.target)
+      }
+    }
+    if (this.renderer.shadowMap.enabled !== on) {
+      this.renderer.shadowMap.enabled = on
+      // 运行时切换 shadowMap.enabled 不会让已编译的材质重新编译，
+      // 不手动标记的话阴影永远出不来（three.js 的经典坑）
+      this.scene.traverse((o) => {
+        const mat = (o as unknown as { material?: THREE.Material | THREE.Material[] }).material
+        if (!mat) return
+        for (const m of Array.isArray(mat) ? mat : [mat]) m.needsUpdate = true
+      })
+    }
     if (this.ground) this.ground.visible = on
     if (!this.shadowLight) return
     const l = this.shadowLight
@@ -520,11 +553,11 @@ export class ViewerEngine {
     l.shadow.mapSize.set(2048, 2048)
     l.shadow.bias = -0.0008
     l.shadow.normalBias = r * 0.01
-    // 光的方向保持预设里的相对方向，但距离要随模型尺度走
-    const dir = l.position.clone().normalize()
+    // 左后上方，距离随模型尺度走
+    const dir = new THREE.Vector3(-0.6, 1.4, -0.35).normalize()
     l.position.copy(this.center).addScaledVector(dir, r * 4)
     l.target.position.copy(this.center)
-    if (!l.target.parent) this.scene.add(l.target)
+    l.target.updateMatrixWorld()
     const cam = l.shadow.camera
     cam.left = -r * 1.6
     cam.right = r * 1.6
@@ -538,7 +571,7 @@ export class ViewerEngine {
     if (!this.ground) {
       this.ground = new THREE.Mesh(
         new THREE.PlaneGeometry(1, 1),
-        new THREE.ShadowMaterial({ opacity: 0.32, transparent: true })
+        new THREE.ShadowMaterial({ opacity: this.shadowOpacity, transparent: true })
       )
       this.ground.rotation.x = -Math.PI / 2
       this.ground.receiveShadow = true

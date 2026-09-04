@@ -9,6 +9,7 @@ import {
   type ViewerPrefs
 } from './lib/viewerEngine'
 import type { HdriEntry, LightingPreset, ModelEntry, ModelStats } from '../shared/types'
+import { IconBack, IconCamera, IconLocate, IconNext, IconPanel, IconPrev, IconStar } from './icons'
 
 interface Props {
   entries: ModelEntry[]
@@ -299,7 +300,9 @@ export default function Viewer({
   return (
     <div className="viewer">
       <div className="vtop">
-        <button onClick={onClose}>← 返回 (Esc)</button>
+        <button onClick={onClose}>
+          <IconBack /> 返回 (Esc)
+        </button>
         <span className="title" title={entry.rel}>
           {entry.name}
         </span>
@@ -310,22 +313,22 @@ export default function Viewer({
         <div className="spacer" />
 
         <button onClick={() => onIndex(index - 1)} disabled={index <= 0}>
-          ← 上一个
+          <IconPrev /> 上一个
         </button>
         <button onClick={() => onIndex(index + 1)} disabled={index >= entries.length - 1}>
-          下一个 →
+          下一个 <IconNext />
         </button>
         <span className="vsep" />
         <button
-          className={isFav ? 'primary' : ''}
+          className={`icon-only${isFav ? ' primary' : ''}`}
           onClick={() => onToggleFavorite(entry)}
-          title="收藏 (Ctrl+D)"
+          title={isFav ? '取消收藏 (Ctrl+D)' : '收藏 (Ctrl+D)'}
         >
-          {isFav ? '★' : '☆'}
+          <IconStar filled={isFav} />
         </button>
         <div className="shot-wrap">
           <button onClick={() => setShotMenu((v) => !v)} disabled={loading || !!error}>
-            导出截图 ▾
+            <IconCamera /> 截图 ▾
           </button>
           {shotMenu && (
             <div className="shot-menu" onMouseLeave={() => setShotMenu(false)}>
@@ -336,13 +339,15 @@ export default function Viewer({
             </div>
           )}
         </div>
-        <button onClick={() => void window.api.showItem(entry.path)}>定位文件</button>
+        <button onClick={() => void window.api.showItem(entry.path)}>
+          <IconLocate /> 定位
+        </button>
         <button
           className={prefs.panelOpen ? 'on' : ''}
           onClick={() => setPrefs({ panelOpen: !prefs.panelOpen })}
           title="显示 / 隐藏面板 (Tab)"
         >
-          面板
+          <IconPanel /> 面板
         </button>
       </div>
 

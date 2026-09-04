@@ -98,8 +98,12 @@ app.whenReady().then(async () => {
   await sleep(800)
   await step('ao-still-on', 'true')
   await step('ao-off', toggle('环境光遮蔽', false))
+  await step('bg-white', `document.querySelectorAll('.prow.seg button[title="纯白"]')[0].click()`)
   await step('shadow-on', toggle('地面阴影', true))
   await step('shadow-off', toggle('地面阴影', false))
+  await step('bg-dark', `document.querySelectorAll('.prow.seg button[title="深灰"]')[0].click()`)
+  await step('shadow-on-dark', toggle('地面阴影', true))
+  await step('shadow-off-dark', toggle('地面阴影', false))
 
   await step('env-tab', clickTab('环境'))
   const hdriCount = await js(`document.querySelectorAll('.hdri-item').length`)

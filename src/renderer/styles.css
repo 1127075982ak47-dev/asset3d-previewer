@@ -1314,3 +1314,32 @@ kbd {
   font-weight: 400;
   color: var(--fg-dim);
 }
+
+/* 图标 */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+}
+button .ico {
+  flex: none;
+  opacity: 0.9;
+}
+button.icon-only {
+  padding: 5px 8px;
+}
+.ctxmenu button,
+.shot-menu button {
+  display: block;
+  min-height: 0;
+}
+.mode-grid button,
+.prow.seg button {
+  min-height: 26px;
+}
+.empty .recent-row button {
+  display: block;
+  min-height: 0;
+}

@@ -244,7 +244,10 @@ function stopWatcher(): void {
 function startWatcher(root: string): void {
   stopWatcher()
   try {
-    watcher = fs.watch(root, { recursive: true }, () => {
+    watcher = fs.watch(root, { recursive: true }, (eventType) => {
+      // Windows 会把"读取文件更新了访问时间"也报成 change，出图本身就会触发一堆；
+      // 只认 rename（新增 / 删除 / 改名），这才是需要重新扫描的情况
+      if (eventType !== 'rename') return
       if (watchTimer) clearTimeout(watchTimer)
       watchTimer = setTimeout(() => send('folder:changed', root), 800)
     })
