@@ -1,7 +1,7 @@
 {
   "name": "asset3d-previewer",
-  "version": "1.0.0",
-  "description": "3D 资源预览器 - 绿色版批量缩略图浏览工具",
+  "version": "1.1.0",
+  "description": "3D 资源预览器 - 免费的绿色版 3D 素材批量缩略图浏览与查看工具",
   "main": "./out/main/index.js",
   "author": "asset3d",
   "license": "MIT",
@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "fzstd": "^0.1.1",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {

@@ -4,7 +4,7 @@ export type ThumbState =
   | 'ready' // 已有完整渲染缩略图
   | 'embedded' // .blend 内嵌预览图（静态，未转 GLB）
   | 'failed' // 出图失败
-  | 'unsupported' // 格式不支持
+  | 'unsupported' // 格式无法预览（但仍然列出来，可拖出/打开/打标）
 
 export interface ModelEntry {
   /** 绝对路径的 sha1，作为稳定 id */
@@ -22,11 +22,22 @@ export interface ModelEntry {
   mtimeMs: number
   /** .blend 需要 Blender 转换才能交互 */
   needsBlender: boolean
+  /** false 表示只是识别出来是 3D 文件，本软件无法渲染它 */
+  previewable: boolean
 }
 
 export interface ScanOptions {
   recursive: boolean
   maxDepth: number
+  /** 是否把 .max / .c4d 这类无法预览的格式也列出来 */
+  includeUnsupported?: boolean
+}
+
+export interface ScanProgress {
+  scannedFiles: number
+  found: number
+  /** 当前正在扫的目录（相对根目录） */
+  dir: string
 }
 
 export interface ScanResult {
@@ -36,6 +47,10 @@ export interface ScanResult {
   hiddenCount: number
   scannedFiles: number
   elapsedMs: number
+  /** 用户中途取消，entries 是部分结果 */
+  cancelled?: boolean
+  /** 根目录不存在等错误 */
+  error?: string
 }
 
 export interface ThumbResult {
@@ -69,6 +84,9 @@ export interface BlenderInfo {
   installs: { version: string; major: number; minor: number; exe: string }[]
 }
 
+export type LightingPreset = 'studio' | 'outdoor' | 'neutral'
+export type ThumbBackground = 'transparent' | 'dark' | 'light' | 'white'
+
 export interface AppSettings {
   thumbSize: number
   concurrency: number
@@ -78,8 +96,18 @@ export interface AppSettings {
   blenderPath: string | null
   /** 是否允许后台调用 Blender 把 .blend 转成 GLB */
   blendAutoConvert: boolean
-  background: string
-  lighting: 'studio' | 'outdoor' | 'neutral'
+  /** 缩略图背景 */
+  background: ThumbBackground
+  /** 缩略图与查看器默认光照 */
+  lighting: LightingPreset
+  /** 左侧文件夹树是否显示 */
+  sidebarVisible: boolean
+  /** 是否列出无法预览的 3D 格式 */
+  showUnsupported: boolean
+  /** 缓存上限（MB），0 = 不限 */
+  cacheLimitMB: number
+  /** 关闭 GPU 加速（显卡驱动有问题时的兜底），改动后需重启 */
+  disableGpu: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -90,7 +118,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   blenderPath: null,
   blendAutoConvert: true,
   background: 'transparent',
-  lighting: 'studio'
+  lighting: 'studio',
+  sidebarVisible: true,
+  showUnsupported: true,
+  cacheLimitMB: 2048,
+  disableGpu: false
 }
 
 /** 收藏与标签库。路径统一小写化后作为键（Windows 路径不区分大小写） */
@@ -100,3 +132,49 @@ export interface LibraryPayload {
   /** 库里出现过的全部标签，供筛选下拉用 */
   allTags: string[]
 }
+
+export interface ThumbRequest {
+  px: number
+  priority: number
+  lighting: LightingPreset
+  background: ThumbBackground
+}
+
+export interface AppInfo {
+  version: string
+  electron: string
+  chrome: string
+  node: string
+  dataDir: string
+  logDir: string | null
+  portable: boolean
+}
+
+export interface ExportBatchResult {
+  ok: boolean
+  dir?: string
+  done?: number
+  total?: number
+  failed?: string[]
+  error?: string
+}
+
+export interface HdriEntry {
+  /** builtin/<file> 或 user/<file> */
+  id: string
+  name: string
+  /** asset3d://hdri/... */
+  url: string
+  builtin: boolean
+}
+
+/** 主进程菜单发给渲染进程的动作 */
+export type MenuAction =
+  | 'open-folder'
+  | 'rescan'
+  | 'settings'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'toggle-sidebar'
+  | 'shortcuts'
+  | 'about'

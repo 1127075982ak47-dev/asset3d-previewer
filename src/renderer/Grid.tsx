@@ -2,17 +2,21 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ModelEntry, ThumbResult } from '../shared/types'
 
 const GAP = 12
-const META_H = 38
+const META_H = 40
 
 interface Props {
   entries: ModelEntry[]
   thumbs: Map<string, ThumbResult>
+  favorites: Set<string>
+  tags: Record<string, string[]>
   cardSize: number
   selectedIds: Set<string>
   onSelect: (index: number, mode: 'single' | 'toggle' | 'range') => void
   onOpen: (index: number) => void
   onContext: (e: React.MouseEvent, entry: ModelEntry, index: number) => void
   onDragStart: (index: number) => void
+  onToggleFavorite: (entry: ModelEntry) => void
+  onThumbError: (entry: ModelEntry) => void
   /** 当前键盘焦点所在的卡片下标 */
   focusedIndex: number
   onFocusIndex: (index: number) => void
@@ -22,10 +26,21 @@ interface Props {
   onVisibleRange: (entries: { entry: ModelEntry; priority: number }[]) => void
 }
 
-function fmtSize(bytes: number): string {
+export function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+export function fmtTris(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`
+  return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+function libKey(e: ModelEntry): string {
+  return e.path.toLowerCase()
 }
 
 /**
@@ -37,12 +52,16 @@ function fmtSize(bytes: number): string {
 export default function Grid({
   entries,
   thumbs,
+  favorites,
+  tags,
   cardSize,
   selectedIds,
   onSelect,
   onOpen,
   onContext,
   onDragStart,
+  onToggleFavorite,
+  onThumbError,
   focusedIndex,
   onFocusIndex,
   keyboardEnabled,
@@ -70,6 +89,16 @@ export default function Grid({
     setViewport({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
   }, [])
+
+  // 换了筛选/排序后列表变短，滚动位置可能已经超出范围
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (el.scrollTop > Math.max(0, totalH - viewport.h)) {
+      el.scrollTop = Math.max(0, totalH - viewport.h)
+      setScrollTop(el.scrollTop)
+    }
+  }, [totalH, viewport.h])
 
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop)
@@ -187,13 +216,16 @@ export default function Grid({
     const row = Math.floor(i / cols)
     const col = i % cols
     const t = thumbs.get(e.id)
+    const fav = favorites.has(libKey(e))
+    const tagList = tags[libKey(e)] ?? []
+    const animated = !!t?.stats && t.stats.animations.length > 0
 
     cards.push(
       <div
         key={e.id}
         className={`card${selectedIds.has(e.id) ? ' sel' : ''}${
           focusedIndex === i ? ' focus' : ''
-        }`}
+        }${e.previewable ? '' : ' unsupported'}`}
         style={{
           width: cardW,
           height: cardH,
@@ -211,11 +243,21 @@ export default function Grid({
           ev.preventDefault()
           onDragStart(i)
         }}
-        title={`${e.rel}\n拖拽可直接拖入 Blender / Unity 等程序`}
+        title={`${e.rel}${tagList.length ? `\n标签: ${tagList.join(', ')}` : ''}${
+          t?.state === 'failed' && t.error ? `\n失败: ${t.error}` : ''
+        }\n拖拽可直接拖入 Blender / Unity 等程序`}
       >
         <div className="thumb">
           {t?.url ? (
-            <img src={t.url} alt={e.name} draggable={false} loading="lazy" />
+            <img
+              src={t.url}
+              alt={e.name}
+              draggable={false}
+              loading="lazy"
+              onError={() => onThumbError(e)}
+            />
+          ) : !e.previewable ? (
+            <span className="placeholder-ext">{e.ext.slice(1).toUpperCase()}</span>
           ) : t?.state === 'failed' ? (
             <span className="placeholder-ico">⚠</span>
           ) : t?.state === 'rendering' || t?.state === 'pending' || !t ? (
@@ -228,8 +270,32 @@ export default function Grid({
             {e.ext.slice(1)}
           </span>
 
+          <span
+            className={`star${fav ? ' on' : ''}`}
+            title={fav ? '取消收藏' : '收藏'}
+            onClick={(ev) => {
+              ev.stopPropagation()
+              onToggleFavorite(e)
+            }}
+            onDoubleClick={(ev) => ev.stopPropagation()}
+          >
+            {fav ? '★' : '☆'}
+          </span>
+
+          {animated && (
+            <span className="state anim" title={`${t!.stats!.animations.length} 段动画`}>
+              ▶ 动画
+            </span>
+          )}
           {t?.state === 'embedded' && (
-            <span className="state embedded" title="来自 .blend 内嵌预览图，尚未转换为可交互模型">
+            <span
+              className="state embedded"
+              title={
+                t.error
+                  ? `来自 .blend 内嵌预览图。Blender 转换失败：${t.error}`
+                  : '来自 .blend 内嵌预览图，尚未转换为可交互模型'
+              }
+            >
               内嵌图
             </span>
           )}
@@ -238,12 +304,26 @@ export default function Grid({
               失败
             </span>
           )}
+          {!e.previewable && (
+            <span className="state unsupported" title="没有开源库能解析这个格式，只能用默认程序打开">
+              不支持预览
+            </span>
+          )}
         </div>
 
         <div className="meta">
           <div className="name">{e.name}</div>
           <div className="sub">
-            <span>{fmtSize(e.size)}</span>
+            <span>
+              {fmtSize(e.size)}
+              {t?.stats ? ` · △${fmtTris(t.stats.triangles)}` : ''}
+            </span>
+            {tagList.length > 0 && (
+              <span className="tags">
+                {tagList.slice(0, 2).join(' · ')}
+                {tagList.length > 2 ? ` +${tagList.length - 2}` : ''}
+              </span>
+            )}
           </div>
         </div>
       </div>

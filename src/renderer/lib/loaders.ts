@@ -11,7 +11,22 @@ import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js'
 import { TDSLoader } from 'three/examples/jsm/loaders/TDSLoader.js'
 import { ThreeMFLoader } from 'three/examples/jsm/loaders/3MFLoader.js'
 import { VRMLLoader } from 'three/examples/jsm/loaders/VRMLLoader.js'
+import { TGALoader } from 'three/examples/jsm/loaders/TGALoader.js'
+import { DDSLoader } from 'three/examples/jsm/loaders/DDSLoader.js'
+import { USDZLoader } from 'three/examples/jsm/loaders/USDZLoader.js'
+import { AMFLoader } from 'three/examples/jsm/loaders/AMFLoader.js'
+import { PCDLoader } from 'three/examples/jsm/loaders/PCDLoader.js'
+import { VTKLoader } from 'three/examples/jsm/loaders/VTKLoader.js'
+import { XYZLoader } from 'three/examples/jsm/loaders/XYZLoader.js'
+import { LWOLoader } from 'three/examples/jsm/loaders/LWOLoader.js'
+import { VOXLoader, VOXMesh } from 'three/examples/jsm/loaders/VOXLoader.js'
+import { KMZLoader } from 'three/examples/jsm/loaders/KMZLoader.js'
+import { MD2Loader } from 'three/examples/jsm/loaders/MD2Loader.js'
+import { MMDLoader } from 'three/examples/jsm/loaders/MMDLoader.js'
+import { Rhino3dmLoader } from 'three/examples/jsm/loaders/3DMLoader.js'
+import { GCodeLoader } from 'three/examples/jsm/loaders/GCodeLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
+import { isBinaryFbx, normalizeFbxAsciiIndent } from './fbxText'
 
 export interface LoadedModel {
   object: THREE.Object3D
@@ -20,6 +35,7 @@ export interface LoadedModel {
 
 let dracoLoader: DRACOLoader | null = null
 let ktx2Loader: KTX2Loader | null = null
+let rhinoLoader: Rhino3dmLoader | null = null
 
 /**
  * 解码器一律指向本地 asset3d://decoder/…。
@@ -42,6 +58,21 @@ async function ensureDecoders(renderer: THREE.WebGLRenderer): Promise<void> {
   }
 }
 
+async function ensureRhino(manager: THREE.LoadingManager): Promise<Rhino3dmLoader> {
+  if (!rhinoLoader) {
+    const base = await window.api.decoderUrl('rhino3dm/')
+    rhinoLoader = new Rhino3dmLoader(manager)
+    rhinoLoader.setLibraryPath(base)
+  }
+  return rhinoLoader
+}
+
+async function fetchBuffer(url: string): Promise<ArrayBuffer> {
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return await r.arrayBuffer()
+}
+
 function textFrom(url: string): Promise<string> {
   return fetch(url).then((r) => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -54,10 +85,16 @@ function baseOf(url: string): string {
   return i < 0 ? './' : url.slice(0, i + 1)
 }
 
-/** STL / PLY 只给几何体，得自己套一个材质才能看 */
-function meshFromGeometry(geo: THREE.BufferGeometry): THREE.Mesh {
-  geo.computeVertexNormals()
+/** STL / PLY / VTK 只给几何体，得自己套一个材质才能看 */
+function meshFromGeometry(geo: THREE.BufferGeometry): THREE.Object3D {
   const hasColor = !!geo.getAttribute('color')
+  const pos = geo.getAttribute('position')
+  // 没有索引也没有法线的点云（扫描仪导出的 PLY 很常见）包成 Mesh 什么都画不出来，
+  // 缩略图一片空白还被当成功缓存。这种要按点渲染。
+  const faceless = !geo.index && pos && pos.count > 0 && !geo.getAttribute('normal') && isPointCloud(geo)
+  if (faceless) return pointsFromGeometry(geo)
+
+  geo.computeVertexNormals()
   const mat = new THREE.MeshStandardMaterial({
     color: hasColor ? 0xffffff : 0xb8bcc4,
     vertexColors: hasColor,
@@ -66,6 +103,29 @@ function meshFromGeometry(geo: THREE.BufferGeometry): THREE.Mesh {
     side: THREE.DoubleSide
   })
   return new THREE.Mesh(geo, mat)
+}
+
+/** 判断无索引几何体是不是点云：顶点数不是 3 的倍数，或者带 PLY 点云特有的属性 */
+function isPointCloud(geo: THREE.BufferGeometry): boolean {
+  const pos = geo.getAttribute('position')
+  if (!pos) return false
+  if (pos.count % 3 !== 0) return true
+  // PLYLoader 遇到没有 face 的文件也会返回 position-only 的几何体；
+  // 三角面几何体顶点数一定是 3 的倍数，但反过来不成立，这里再看一眼是否有 uv
+  return !geo.getAttribute('uv') && pos.count > 30000
+}
+
+function pointsFromGeometry(geo: THREE.BufferGeometry): THREE.Points {
+  const hasColor = !!geo.getAttribute('color')
+  geo.computeBoundingSphere()
+  const radius = geo.boundingSphere?.radius ?? 1
+  const mat = new THREE.PointsMaterial({
+    color: hasColor ? 0xffffff : 0xb8c4d6,
+    vertexColors: hasColor,
+    size: Math.max(radius / 200, 1e-4),
+    sizeAttenuation: true
+  })
+  return new THREE.Points(geo, mat)
 }
 
 /** 收集一棵树上所有材质引用到的贴图 */
@@ -97,14 +157,25 @@ interface Tracker {
  * 但 FBXLoader / ColladaLoader / MTLLoader 是 TextureLoader.load()
  * 发出去就不管了 —— loadAsync 返回时贴图往往还没开始解码，
  * 此时 texture.image 还是 undefined。直接渲染的话 WebGL 拿到一张空贴图，
- * 整个模型渲染成纯黑（控制台会报 "Texture marked for update but no image data found"）。
+ * 整个模型渲染成纯黑。
  *
- * 本机这套 FBX 正是如此：贴图数据完全正确，缩略图却全黑。
  * 用 manager 而不是轮询贴图，是因为加载失败时它同样会结束计数，
  * 不会让一个坏贴图把整批出图卡到超时。
+ *
+ * 顺带在这里注册 TGA / DDS 解码器：FBX/OBJ 素材包里 .tga 贴图极其常见，
+ * 浏览器原生解不了，FBXLoader / MTLLoader / ColladaLoader 都会先问
+ * manager.getHandler 有没有对应的加载器。
  */
-function createTracker(): Tracker {
+function createTracker(onProgress?: (loaded: number, total: number) => void): Tracker {
   const manager = new THREE.LoadingManager()
+  manager.addHandler(/\.tga$/i, new TGALoader(manager))
+  manager.addHandler(/\.dds$/i, new DDSLoader(manager))
+  // 文件名里的 # 和 ? 会被当成 URL 的 hash/query 截掉；相对引用是加载器
+  // 原样拼接的，这里统一编码。我们自己生成的 URL 已经编码过，不会重复。
+  manager.setURLModifier((url) =>
+    url.startsWith('asset3d://') ? url.replace(/#/g, '%23').replace(/\?/g, '%3F') : url
+  )
+
   let idle = true
   let waiters: (() => void)[] = []
   let loaded = 0
@@ -121,10 +192,12 @@ function createTracker(): Tracker {
     idle = false
     loaded = itemsLoaded
     total = itemsTotal
+    onProgress?.(loaded, total)
   }
   manager.onProgress = (_url, itemsLoaded, itemsTotal): void => {
     loaded = itemsLoaded
     total = itemsTotal
+    onProgress?.(loaded, total)
   }
   manager.onLoad = finish
   // 出错时 three.js 仍会调 itemEnd，onLoad 正常会触发；
@@ -146,10 +219,7 @@ function createTracker(): Tracker {
 const TEXTURE_TIMEOUT_MS = 20000
 
 /** 等贴图真正就位，再补一次 needsUpdate 保证重新上传 GPU */
-async function waitForTextures(
-  root: THREE.Object3D,
-  tracker: Tracker
-): Promise<void> {
+async function waitForTextures(root: THREE.Object3D, tracker: Tracker): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   await Promise.race([
     tracker.settled(),
@@ -165,12 +235,17 @@ async function waitForTextures(
   }
 }
 
+export interface LoadOptions {
+  onProgress?: (loaded: number, total: number) => void
+}
+
 export async function loadModel(
   url: string,
   ext: string,
-  renderer: THREE.WebGLRenderer
+  renderer: THREE.WebGLRenderer,
+  opts: LoadOptions = {}
 ): Promise<LoadedModel> {
-  const tracker = createTracker()
+  const tracker = createTracker(opts.onProgress)
   const model = await loadRaw(url, ext, renderer, tracker.manager)
   await waitForTextures(model.object, tracker)
   return model
@@ -198,28 +273,36 @@ async function loadRaw(
     }
 
     case '.fbx': {
-      const obj = await new FBXLoader(manager).loadAsync(url)
+      // 自己取字节再 parse：ASCII 格式先把缩进规整一遍（见 fbxText.ts）
+      const buf = await fetchBuffer(url)
+      const loader = new FBXLoader(manager)
+      const base = baseOf(url)
+      loader.setPath(base)
+      let input = buf
+      if (!isBinaryFbx(buf)) {
+        const text = new TextDecoder('utf-8').decode(buf)
+        input = new TextEncoder().encode(normalizeFbxAsciiIndent(text)).buffer as ArrayBuffer
+      }
+      const obj = loader.parse(input, base)
       return { object: obj, animations: obj.animations ?? [] }
     }
 
     case '.obj': {
       const loader = new OBJLoader(manager)
-      // 先把 .obj 里的 mtllib 抠出来，有材质库就先加载，否则模型是灰的
-      try {
-        const text = await textFrom(url)
-        const m = /^\s*mtllib\s+(.+)\s*$/im.exec(text)
-        if (m) {
-          const mtlName = m[1].trim()
-          const mtl = await new MTLLoader(manager)
-            .setPath(baseOf(url))
-            .loadAsync(mtlName)
+      // 只读一次文本：先把 mtllib 抠出来加载材质库，再直接 parse，
+      // 不让 OBJLoader 再下载一遍（大 OBJ 动辄几百 MB）
+      const text = await textFrom(url)
+      const m = /^\s*mtllib\s+(.+?)\s*$/im.exec(text)
+      if (m) {
+        try {
+          const mtl = await new MTLLoader(manager).setPath(baseOf(url)).loadAsync(m[1].trim())
           mtl.preload()
           loader.setMaterials(mtl)
+        } catch {
+          /* 没有或加载不了 mtl 就用默认材质 */
         }
-      } catch {
-        /* 没有或加载不了 mtl 就用默认材质 */
       }
-      const obj = await loader.loadAsync(url)
+      const obj = loader.parse(text)
       return { object: obj, animations: [] }
     }
 
@@ -233,8 +316,39 @@ async function loadRaw(
       return { object: meshFromGeometry(geo), animations: [] }
     }
 
+    case '.vtk':
+    case '.vtp': {
+      const geo = await new VTKLoader(manager).loadAsync(url)
+      return { object: meshFromGeometry(geo), animations: [] }
+    }
+
+    case '.drc': {
+      await ensureDecoders(renderer)
+      const geo = await dracoLoader!.loadAsync(url)
+      return { object: meshFromGeometry(geo), animations: [] }
+    }
+
+    case '.xyz': {
+      const geo = await new XYZLoader(manager).loadAsync(url)
+      return { object: pointsFromGeometry(geo), animations: [] }
+    }
+
+    case '.pcd': {
+      const pts = await new PCDLoader(manager).loadAsync(url)
+      const mat = pts.material as THREE.PointsMaterial
+      pts.geometry.computeBoundingSphere()
+      mat.size = Math.max((pts.geometry.boundingSphere?.radius ?? 1) / 200, 1e-4)
+      mat.sizeAttenuation = true
+      return { object: pts, animations: [] }
+    }
+
     case '.dae': {
       const c = await new ColladaLoader(manager).loadAsync(url)
+      return { object: c.scene, animations: c.scene.animations ?? [] }
+    }
+
+    case '.kmz': {
+      const c = await new KMZLoader(manager).loadAsync(url)
       return { object: c.scene, animations: c.scene.animations ?? [] }
     }
 
@@ -248,8 +362,61 @@ async function loadRaw(
       return { object: obj, animations: [] }
     }
 
+    case '.amf': {
+      const obj = await new AMFLoader(manager).loadAsync(url)
+      return { object: obj, animations: [] }
+    }
+
     case '.wrl': {
       const obj = await new VRMLLoader(manager).loadAsync(url)
+      return { object: obj, animations: [] }
+    }
+
+    case '.usdz': {
+      const obj = await new USDZLoader(manager).loadAsync(url)
+      return { object: obj, animations: [] }
+    }
+
+    case '.lwo': {
+      const r = await new LWOLoader(manager).loadAsync(url)
+      const group = new THREE.Group()
+      for (const m of r.meshes ?? []) group.add(m)
+      return { object: group, animations: [] }
+    }
+
+    case '.vox': {
+      const chunks = await new VOXLoader(manager).loadAsync(url)
+      const group = new THREE.Group()
+      for (const chunk of chunks) group.add(new VOXMesh(chunk))
+      return { object: group, animations: [] }
+    }
+
+    case '.md2': {
+      const geo = await new MD2Loader(manager).loadAsync(url)
+      const mesh = new THREE.Mesh(
+        geo,
+        new THREE.MeshStandardMaterial({ color: 0xb8bcc4, roughness: 0.7, side: THREE.DoubleSide })
+      )
+      return {
+        object: mesh,
+        animations: (geo as unknown as { animations?: THREE.AnimationClip[] }).animations ?? []
+      }
+    }
+
+    case '.pmx':
+    case '.pmd': {
+      const mesh = await new MMDLoader(manager).loadAsync(url)
+      return { object: mesh, animations: [] }
+    }
+
+    case '.3dm': {
+      const loader = await ensureRhino(manager)
+      const obj = await loader.loadAsync(url)
+      return { object: obj, animations: [] }
+    }
+
+    case '.gcode': {
+      const obj = await new GCodeLoader(manager).loadAsync(url)
       return { object: obj, animations: [] }
     }
 

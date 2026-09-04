@@ -3,14 +3,17 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { sha1 } from './util'
+import type { LightingPreset, ThumbBackground } from '../shared/types'
 
 export { sha1 }
 
 /**
- * 渲染配方版本号。改动出图逻辑（光照/构图/尺寸）时 +1，
+ * 渲染配方版本号。改动出图逻辑（光照/构图/尺寸/贴图解码）时 +1，
  * 让所有旧缓存自动失效，不用手动清缓存。
+ *
+ * v5：ASCII FBX 缩进修复、TGA/DDS 贴图、空白检测、缓存键去掉绝对路径。
  */
-export const RENDER_VERSION = 4
+export const RENDER_VERSION = 5
 
 let cacheRoot: string | null = null
 let portable = false
@@ -75,17 +78,48 @@ export function cacheDir(): string {
   return cacheRoot!
 }
 
-/** 缓存键含 mtime+size，源文件一改就自动失效 */
-export function thumbKey(
-  filePath: string,
-  mtimeMs: number,
-  size: number,
-  px: number
-): string {
-  return sha1(`${filePath}|${mtimeMs}|${size}|${px}|v${RENDER_VERSION}`)
+export function isPortable(): boolean {
+  if (!cacheRoot) initCache()
+  return portable
 }
 
-function thumbPathFor(key: string): string {
+export function logsDir(): string {
+  return path.join(cacheDir(), 'logs')
+}
+
+export interface FileIdentity {
+  path: string
+  mtimeMs: number
+  size: number
+}
+
+/**
+ * 文件身份：文件名 + 大小 + 修改时间，不含所在目录。
+ *
+ * 1.0 把绝对路径也放进键里，结果"绿色版拷到别的机器/换个盘符"缓存就全部失效，
+ * 和 README 承诺的可移植性矛盾。去掉路径之后同一个文件的多份副本还能共享一次渲染。
+ * 同名同大小同 mtime 却内容不同的文件几乎不存在，就算撞上也只是缩略图张冠李戴。
+ */
+function identity(f: FileIdentity): string {
+  return `${path.basename(f.path).toLowerCase()}|${Math.round(f.mtimeMs)}|${f.size}`
+}
+
+/** 缓存键含 mtime+size，源文件一改就自动失效 */
+export function thumbKey(
+  f: FileIdentity,
+  px: number,
+  lighting: LightingPreset,
+  background: ThumbBackground
+): string {
+  return sha1(`${identity(f)}|${px}|${lighting}|${background}|v${RENDER_VERSION}`)
+}
+
+/** .blend 内嵌预览图用另一个键，和真渲染图分开 */
+export function embeddedThumbKey(f: FileIdentity): string {
+  return sha1(`${identity(f)}|embedded|v${RENDER_VERSION}`)
+}
+
+export function thumbPathFor(key: string): string {
   // 两级分片，避免单目录塞几万个文件拖慢文件系统
   return path.join(cacheDir(), 'thumbs', key.slice(0, 2), `${key}.png`)
 }
@@ -108,6 +142,11 @@ export async function writeThumb(key: string, data: Buffer): Promise<string> {
   await fsp.writeFile(tmp, data)
   await fsp.rename(tmp, p)
   return p
+}
+
+export async function deleteThumb(key: string): Promise<void> {
+  await fsp.rm(thumbPathFor(key), { force: true }).catch(() => {})
+  await fsp.rm(metaPathFor(key), { force: true }).catch(() => {})
 }
 
 /**
@@ -139,8 +178,8 @@ export async function writeMeta(key: string, data: unknown): Promise<void> {
 }
 
 /** Blender 转换出的 GLB 缓存路径 */
-export function glbCachePath(filePath: string, mtimeMs: number, size: number): string {
-  const key = sha1(`${filePath}|${mtimeMs}|${size}|glb-v1`)
+export function glbCachePath(f: FileIdentity): string {
+  const key = sha1(`${identity(f)}|glb-v2`)
   return path.join(cacheDir(), 'glb', `${key}.glb`)
 }
 
@@ -152,9 +191,15 @@ export async function clearCache(): Promise<void> {
   await fsp.mkdir(path.join(root, 'glb'), { recursive: true })
 }
 
-export async function cacheStats(): Promise<{ files: number; bytes: number }> {
-  let files = 0
-  let bytes = 0
+export interface CacheFile {
+  path: string
+  bytes: number
+  mtimeMs: number
+}
+
+/** 列出缓存里的所有文件（thumbs + glb），供统计与淘汰用 */
+export async function listCacheFiles(): Promise<CacheFile[]> {
+  const out: CacheFile[] = []
   async function walk(dir: string): Promise<void> {
     let items: fs.Dirent[]
     try {
@@ -166,9 +211,9 @@ export async function cacheStats(): Promise<{ files: number; bytes: number }> {
       const p = path.join(dir, it.name)
       if (it.isDirectory()) await walk(p)
       else {
-        files++
         try {
-          bytes += (await fsp.stat(p)).size
+          const st = await fsp.stat(p)
+          out.push({ path: p, bytes: st.size, mtimeMs: st.mtimeMs })
         } catch {
           /* 忽略 */
         }
@@ -177,5 +222,10 @@ export async function cacheStats(): Promise<{ files: number; bytes: number }> {
   }
   await walk(path.join(cacheDir(), 'thumbs'))
   await walk(path.join(cacheDir(), 'glb'))
-  return { files, bytes }
+  return out
+}
+
+export async function cacheStats(): Promise<{ files: number; bytes: number }> {
+  const files = await listCacheFiles()
+  return { files: files.length, bytes: files.reduce((s, f) => s + f.bytes, 0) }
 }

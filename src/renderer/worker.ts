@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { disposeObject, loadModel } from './lib/loaders'
 import {
   addLights,
@@ -6,9 +7,10 @@ import {
   createEnvironment,
   frameObject,
   normalizeMaterials,
-  relaxBackfaceCulling
+  relaxBackfaceCulling,
+  type LightingPreset
 } from './lib/framing'
-import type { WorkerApi } from '../preload'
+import type { WorkerApi, WorkerJob } from '../preload'
 import type { Api } from '../preload'
 
 declare global {
@@ -41,14 +43,41 @@ renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 1.0
 
+// 上下文丢失（显卡驱动重置、显存耗尽）后这个窗口就废了，让主进程重建
+canvas.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault()
+  window.workerApi.contextLost()
+})
+
 const envMap = createEnvironment(renderer)
 
 const scene = new THREE.Scene()
 scene.environment = envMap
 scene.background = null
-addLights(scene, 'studio')
+let lights: THREE.Light[] = addLights(scene, 'studio')
+let currentLighting: LightingPreset = 'studio'
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000)
+
+const BG_COLORS: Record<string, number | null> = {
+  transparent: null,
+  dark: 0x14161a,
+  light: 0xd8dade,
+  white: 0xffffff
+}
+
+function applyLighting(preset: LightingPreset): void {
+  if (preset === currentLighting) return
+  for (const l of lights) scene.remove(l)
+  lights = addLights(scene, preset)
+  currentLighting = preset
+}
+
+function applyBackground(bg: string): number | null {
+  const color = BG_COLORS[bg] ?? null
+  scene.background = color === null ? null : new THREE.Color(color)
+  return color
+}
 
 function canvasToPng(): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
@@ -62,66 +91,63 @@ function canvasToPng(): Promise<Uint8Array> {
   })
 }
 
-/** 排查材质问题用：把每个材质的关键字段和贴图状态导出来 */
-function collectDiag(root: THREE.Object3D): unknown[] {
-  const out: unknown[] = []
-  root.traverse((o) => {
-    const mesh = o as THREE.Mesh
-    if (!mesh.isMesh) return
-    const g = mesh.geometry
-    const attrs = g ? Object.keys(g.attributes) : []
-    const uv = g?.getAttribute('uv')
-    let uvRange: string | null = null
-    if (uv) {
-      let mnU = Infinity
-      let mxU = -Infinity
-      let mnV = Infinity
-      let mxV = -Infinity
-      for (let i = 0; i < uv.count; i++) {
-        const u = uv.getX(i)
-        const v = uv.getY(i)
-        if (u < mnU) mnU = u
-        if (u > mxU) mxU = u
-        if (v < mnV) mnV = v
-        if (v > mxV) mxV = v
+/**
+ * 出图后检查画面里到底有没有东西。
+ *
+ * 加载"成功"但什么都没画出来的情况真实存在：材质全坏、几何体退化、
+ * 相机没框到。1.0 会把这张空图当成功缓存起来，用户看到一张透明卡片
+ * 还以为模型本身是空的。这里抽样统计非背景像素比例，太低就判失败。
+ */
+function coverage(px: number, bgColor: number | null): number {
+  const gl = renderer.getContext()
+  const buf = new Uint8Array(px * px * 4)
+  gl.readPixels(0, 0, px, px, gl.RGBA, gl.UNSIGNED_BYTE, buf)
+  const step = px >= 512 ? 4 : 2
+  let hit = 0
+  let n = 0
+  if (bgColor === null) {
+    for (let y = 0; y < px; y += step) {
+      for (let x = 0; x < px; x += step) {
+        n++
+        if (buf[(y * px + x) * 4 + 3] > 16) hit++
       }
-      uvRange = `u[${mnU.toFixed(3)},${mxU.toFixed(3)}] v[${mnV.toFixed(3)},${mxV.toFixed(3)}]`
     }
+  } else {
+    const br = (bgColor >> 16) & 255
+    const bg = (bgColor >> 8) & 255
+    const bb = bgColor & 255
+    for (let y = 0; y < px; y += step) {
+      for (let x = 0; x < px; x += step) {
+        n++
+        const i = (y * px + x) * 4
+        if (
+          Math.abs(buf[i] - br) > 10 ||
+          Math.abs(buf[i + 1] - bg) > 10 ||
+          Math.abs(buf[i + 2] - bb) > 10
+        )
+          hit++
+      }
+    }
+  }
+  return n === 0 ? 0 : hit / n
+}
 
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    for (const m of mats) {
-      const mm = m as THREE.MeshPhongMaterial & { map?: THREE.Texture }
-      const img = mm.map?.image as { width?: number; src?: string } | undefined
-      out.push({
-        mesh: o.name,
-        attrs,
-        uvRange,
-        mat: mm.name,
-        type: mm.type,
-        color: mm.color?.getHexString?.(),
-        emissive: mm.emissive?.getHexString?.(),
-        specular: (mm as THREE.MeshPhongMaterial).specular?.getHexString?.(),
-        opacity: mm.opacity,
-        transparent: mm.transparent,
-        vertexColors: mm.vertexColors,
-        hasMap: !!mm.map,
-        mapLoaded: !!img?.width,
-        mapSize: img?.width ? `${img.width}` : null,
-        mapColorSpace: mm.map?.colorSpace,
-        mapFlipY: mm.map?.flipY,
-        mapImageType: mm.map?.image
-          ? (mm.map.image as object).constructor?.name
-          : null,
-        mapWrap: mm.map ? `${mm.map.wrapS}/${mm.map.wrapT}` : null
-      })
-    }
+async function exportGlb(object: THREE.Object3D, animations: THREE.AnimationClip[]): Promise<Uint8Array> {
+  const exporter = new GLTFExporter()
+  const result = await exporter.parseAsync(object, {
+    binary: true,
+    animations,
+    onlyVisible: true,
+    includeCustomExtensions: false
   })
-  return out
+  if (result instanceof ArrayBuffer) return new Uint8Array(result)
+  // 理论上 binary:true 只会给 ArrayBuffer；兜一手
+  return new TextEncoder().encode(JSON.stringify(result))
 }
 
 let busy = false
 
-window.workerApi.onRender(async (job) => {
+window.workerApi.onRender(async (job: WorkerJob) => {
   if (busy) {
     window.workerApi.result({ jobId: job.jobId, ok: false, error: 'worker 忙' })
     return
@@ -130,14 +156,22 @@ window.workerApi.onRender(async (job) => {
 
   let loaded: Awaited<ReturnType<typeof loadModel>> | null = null
   try {
+    loaded = await loadModel(job.url, job.ext, renderer)
+
+    if (job.kind === 'export') {
+      // 导出走原始材质：normalizeMaterials 是为了渲染好看，
+      // 但转换成文件应该尽量保真
+      const glb = await exportGlb(loaded.object, loaded.animations)
+      window.workerApi.result({ jobId: job.jobId, ok: true, glb })
+      return
+    }
+
     renderer.setSize(job.px, job.px, false)
     camera.aspect = 1
     camera.updateProjectionMatrix()
+    applyLighting(job.lighting ?? 'studio')
+    const bgColor = applyBackground(job.background ?? 'transparent')
 
-    loaded = await loadModel(job.url, job.ext, renderer)
-
-    // 诊断用：只把贴图原色画出来，不带任何光照，
-    // 用来区分「贴图/UV 采样错了」还是「材质光照算错了」
     normalizeMaterials(loaded.object)
     relaxBackfaceCulling(loaded.object)
     scene.add(loaded.object)
@@ -148,14 +182,18 @@ window.workerApi.onRender(async (job) => {
     // 所以整条链路都不能依赖 rAF。
     renderer.render(scene, camera)
 
+    const cov = coverage(job.px, bgColor)
+    if (cov < 0.001) {
+      throw new Error('渲染为空：模型加载成功但画面里没有任何可见几何体')
+    }
+
     const png = await canvasToPng()
     // 模型已经在内存里了，顺手统计一份，省得筛选时再解析一遍文件
     window.workerApi.result({
       jobId: job.jobId,
       ok: true,
       png,
-      stats: computeStats(loaded.object, loaded.animations),
-      diag: job.diag ? collectDiag(loaded.object) : undefined
+      stats: computeStats(loaded.object, loaded.animations)
     })
   } catch (e) {
     window.workerApi.result({

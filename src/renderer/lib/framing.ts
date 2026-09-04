@@ -207,7 +207,14 @@ export function normalizeMaterials(root: THREE.Object3D): void {
         map: src.map ?? null,
         normalMap: src.normalMap ?? null,
         normalScale: src.normalScale ? src.normalScale.clone() : undefined,
+        // OBJ 的 map_bump / FBX 的 Bump 贴图不能丢，否则细节全平
+        bumpMap: src.bumpMap ?? null,
+        bumpScale: typeof src.bumpScale === 'number' ? src.bumpScale : 1,
         aoMap: src.aoMap ?? null,
+        aoMapIntensity: typeof src.aoMapIntensity === 'number' ? src.aoMapIntensity : 1,
+        lightMap: src.lightMap ?? null,
+        lightMapIntensity: typeof src.lightMapIntensity === 'number' ? src.lightMapIntensity : 1,
+        displacementMap: src.displacementMap ?? null,
         alphaMap: src.alphaMap ?? null,
         emissiveMap: src.emissiveMap ?? null,
         // 只有真的有自发光贴图时才保留自发光色，否则一律归零

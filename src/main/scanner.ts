@@ -2,14 +2,8 @@ import type { Dirent } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { sha1 } from './util'
-import {
-  COMPANION_EXTS,
-  TEXTURE_EXTS,
-  extOf,
-  isBlend,
-  isModelExt
-} from '../shared/formats'
-import type { ModelEntry, ScanOptions, ScanResult } from '../shared/types'
+import { classifyExt, extOf, isBlend } from '../shared/formats'
+import type { ModelEntry, ScanOptions, ScanProgress, ScanResult } from '../shared/types'
 
 /** 扫描时直接跳过的目录，省时间也避免噪音 */
 const SKIP_DIRS = new Set([
@@ -21,29 +15,52 @@ const SKIP_DIRS = new Set([
   '__MACOSX'
 ])
 
-/**
- * 判断一个文件是否是“伴生文件”——它属于某个模型，不该单独占一张卡片。
- *
- * 这是用户截图里那 70 个噪音图标的解药：GLTF 目录下 35 个 .bin 和
- * textures/ColorAtlas.png 全部归到这里，只留 35 个 .gltf 成卡。
- */
-function isCompanion(ext: string): boolean {
-  return COMPANION_EXTS.has(ext) || TEXTURE_EXTS.has(ext)
+/** 一次并行 stat 多少个文件。网络盘上串行 stat 是扫描慢的主因 */
+const STAT_BATCH = 32
+
+export interface ScanHooks {
+  onProgress?: (p: ScanProgress) => void
+  isCancelled?: () => boolean
 }
+
+export class ScanError extends Error {}
 
 export async function scanFolder(
   root: string,
-  opts: ScanOptions
+  opts: ScanOptions,
+  hooks: ScanHooks = {}
 ): Promise<ScanResult> {
   const started = Date.now()
+
+  // 根目录不存在要明确报错，而不是返回一个空结果让用户以为文件夹是空的
+  let rootStat
+  try {
+    rootStat = await fsp.stat(root)
+  } catch {
+    throw new ScanError(`目录不存在或无法访问：${root}`)
+  }
+  if (!rootStat.isDirectory()) throw new ScanError(`不是文件夹：${root}`)
+
+  const includeUnsupported = opts.includeUnsupported !== false
   const entries: ModelEntry[] = []
   let hiddenCount = 0
   let scannedFiles = 0
+  let cancelled = false
+  let lastReport = 0
+
+  const report = (dir: string, force = false): void => {
+    if (!hooks.onProgress) return
+    const now = Date.now()
+    if (!force && now - lastReport < 150) return
+    lastReport = now
+    hooks.onProgress({ scannedFiles, found: entries.length, dir: path.relative(root, dir) || '.' })
+  }
 
   // 解析 realpath 做软链环路保护，否则遇到循环软链会无限递归
   const seenDirs = new Set<string>()
 
   async function walk(dir: string, depth: number): Promise<void> {
+    if (cancelled) return
     if (depth > opts.maxDepth) return
 
     let real: string
@@ -52,8 +69,8 @@ export async function scanFolder(
     } catch {
       return
     }
-    if (seenDirs.has(real)) return
-    seenDirs.add(real)
+    if (seenDirs.has(real.toLowerCase())) return
+    seenDirs.add(real.toLowerCase())
 
     let items: Dirent[]
     try {
@@ -64,52 +81,88 @@ export async function scanFolder(
     }
 
     const subdirs: string[] = []
+    const candidates: { full: string; name: string; ext: string }[] = []
 
     for (const it of items) {
       const full = path.join(dir, it.name)
 
       if (it.isDirectory()) {
-        if (!SKIP_DIRS.has(it.name) && !it.name.startsWith('.')) {
-          subdirs.push(full)
-        }
+        if (!SKIP_DIRS.has(it.name) && !it.name.startsWith('.')) subdirs.push(full)
         continue
       }
-      if (!it.isFile()) continue
+
+      // 符号链接 / junction：Dirent 里既不是目录也不是文件，得 stat 一下才知道
+      if (it.isSymbolicLink()) {
+        try {
+          const st = await fsp.stat(full)
+          if (st.isDirectory()) {
+            if (!SKIP_DIRS.has(it.name) && !it.name.startsWith('.')) subdirs.push(full)
+            continue
+          }
+          if (!st.isFile()) continue
+        } catch {
+          continue
+        }
+      } else if (!it.isFile()) {
+        continue
+      }
 
       scannedFiles++
       const ext = extOf(it.name)
+      const kind = classifyExt(ext)
 
-      if (!isModelExt(ext)) {
-        if (isCompanion(ext)) hiddenCount++
-        continue
+      if (kind === 'mesh' || kind === 'blend') {
+        candidates.push({ full, name: it.name, ext })
+      } else if (kind === 'unsupported') {
+        if (includeUnsupported) candidates.push({ full, name: it.name, ext })
+        else hiddenCount++
+      } else if (kind === 'companion' || kind === 'texture') {
+        hiddenCount++
       }
+    }
 
-      let st: Awaited<ReturnType<typeof fsp.stat>>
-      try {
-        st = await fsp.stat(full)
-      } catch {
-        continue
-      }
-
-      entries.push({
-        id: sha1(full),
-        path: full,
-        name: it.name.slice(0, it.name.length - ext.length),
-        ext,
-        dir,
-        rel: path.relative(root, full) || it.name,
-        size: st.size,
-        mtimeMs: st.mtimeMs,
-        needsBlender: isBlend(ext)
+    // 目录内并行 stat，网络盘上串行是扫描慢的主因
+    for (let i = 0; i < candidates.length; i += STAT_BATCH) {
+      if (cancelled) return
+      const chunk = candidates.slice(i, i + STAT_BATCH)
+      const stats = await Promise.all(
+        chunk.map((c) => fsp.stat(c.full).catch(() => null))
+      )
+      chunk.forEach((c, j) => {
+        const st = stats[j]
+        if (!st) return
+        const kind = classifyExt(c.ext)
+        entries.push({
+          id: sha1(c.full),
+          path: c.full,
+          name: c.name.slice(0, c.name.length - c.ext.length),
+          ext: c.ext,
+          dir,
+          rel: path.relative(root, c.full) || c.name,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          needsBlender: isBlend(c.ext),
+          previewable: kind !== 'unsupported'
+        })
       })
     }
 
+    report(dir)
+    if (hooks.isCancelled?.()) {
+      cancelled = true
+      return
+    }
+
     if (opts.recursive) {
-      for (const sd of subdirs) await walk(sd, depth + 1)
+      for (const sd of subdirs) {
+        await walk(sd, depth + 1)
+        if (cancelled) return
+      }
     }
   }
 
   await walk(root, 0)
+  report(root, true)
 
   // 默认按相对路径自然排序，同目录的模型挨在一起
   entries.sort((a, b) =>
@@ -121,7 +174,8 @@ export async function scanFolder(
     entries,
     hiddenCount,
     scannedFiles,
-    elapsedMs: Date.now() - started
+    elapsedMs: Date.now() - started,
+    cancelled: cancelled || undefined
   }
 }
 

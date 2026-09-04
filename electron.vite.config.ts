@@ -7,7 +7,11 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/main/index.ts') }
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // 单独打出来给验收脚本复用，避免脚本里再抄一份会漂移的副本
+          pathPolicy: resolve(__dirname, 'src/main/pathPolicy.ts')
+        }
       }
     }
   },

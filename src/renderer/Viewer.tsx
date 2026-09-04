@@ -18,6 +18,9 @@ interface Props {
   index: number
   onIndex: (i: number) => void
   onClose: () => void
+  lighting: LightingPreset
+  favorites: Set<string>
+  onToggleFavorite: (entry: ModelEntry) => void
 }
 
 const BACKGROUNDS: { key: string; label: string; color: number | null }[] = [
@@ -38,7 +41,15 @@ function fmtDim(d: [number, number, number]): string {
   return `${f(d[0])} × ${f(d[1])} × ${f(d[2])}`
 }
 
-export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX.Element {
+export default function Viewer({
+  entries,
+  index,
+  onIndex,
+  onClose,
+  lighting: initialLighting,
+  favorites,
+  onToggleFavorite
+}: Props): JSX.Element {
   const entry = entries[index]
   const hostRef = useRef<HTMLDivElement>(null)
 
@@ -70,7 +81,8 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
   const [showAxes, setShowAxes] = useState(false)
   const [showBox, setShowBox] = useState(false)
   const [bg, setBg] = useState('dark')
-  const [lighting, setLighting] = useState<LightingPreset>('studio')
+  const [lighting, setLighting] = useState<LightingPreset>(initialLighting)
+  const [progress, setProgress] = useState<number | null>(null)
   const [clipNames, setClipNames] = useState<string[]>([])
   const [clipIdx, setClipIdx] = useState(-1)
   const [playing, setPlaying] = useState(true)
@@ -106,7 +118,7 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
       RIGHT: THREE.MOUSE.PAN
     }
 
-    const lights = addLights(scene, 'studio')
+    const lights = addLights(scene, initialLighting)
 
     const grid = new THREE.GridHelper(10, 20, 0x3a4050, 0x262b33)
     scene.add(grid)
@@ -189,6 +201,7 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
     setStats(null)
     setClipNames([])
     setClipIdx(-1)
+    setProgress(null)
     setLoadingMsg(
       entry.ext === '.blend'
         ? '正在调用 Blender 转换为 GLB…（首次较慢，之后走缓存）'
@@ -212,12 +225,22 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
       t.action = null
 
       try {
+        if (!entry.previewable) {
+          throw new Error(
+            entry.ext +
+              ' 是私有格式，没有开源库能解析它。可以右键「用默认程序打开」，或在原软件里导出为 FBX / GLB。'
+          )
+        }
         const resolved = await window.api.viewableUrl(entry)
         if (cancelled) return
         if (!resolved.url) throw new Error(resolved.error ?? '无法解析模型路径')
 
         const ext = entry.ext === '.blend' ? '.glb' : entry.ext
-        const loaded = await loadModel(resolved.url, ext, t.renderer)
+        const loaded = await loadModel(resolved.url, ext, t.renderer, {
+          onProgress: (l, tot) => {
+            if (!cancelled && tot > 0) setProgress(Math.round((l / tot) * 100))
+          }
+        })
         if (cancelled) {
           disposeObject(loaded.object)
           return
@@ -331,10 +354,18 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
   /* ---------- 键盘 ---------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      const inControl =
+        e.target instanceof HTMLSelectElement ||
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
       if (e.key === 'Escape') {
         e.preventDefault()
-        onClose()
-      } else if (e.key === 'ArrowRight') {
+        if (inControl) (e.target as HTMLElement).blur()
+        else onClose()
+        return
+      }
+      if (inControl) return
+      if (e.key === 'ArrowRight') {
         e.preventDefault()
         if (index < entries.length - 1) onIndex(index + 1)
       } else if (e.key === 'ArrowLeft') {
@@ -429,13 +460,23 @@ export default function Viewer({ entries, index, onIndex, onClose }: Props): JSX
 
         <button onClick={() => void screenshot()}>导出截图</button>
         <button onClick={() => void window.api.showItem(entry.path)}>定位文件</button>
+        <button
+          className={favorites.has(entry.path.toLowerCase()) ? 'primary' : ''}
+          onClick={() => onToggleFavorite(entry)}
+          title="收藏 (Ctrl+D)"
+        >
+          {favorites.has(entry.path.toLowerCase()) ? '★' : '☆'}
+        </button>
       </div>
 
       <div className="stage" ref={hostRef}>
         {loading && (
           <div className="loading">
             <span className="spinner" />
-            <span>{loadingMsg}</span>
+            <span>
+              {loadingMsg}
+              {progress !== null && progress < 100 ? ' ' + progress + '%' : ''}
+            </span>
           </div>
         )}
 

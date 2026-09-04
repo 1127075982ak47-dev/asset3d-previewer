@@ -1,6 +1,6 @@
 appId: com.asset3d.previewer
 productName: 3D资源预览器
-copyright: MIT Licensed
+copyright: MIT Licensed · 免费软件
 
 directories:
   output: release
@@ -10,27 +10,32 @@ files:
   - out/**/*
   - package.json
 
-# DRACO / KTX2 解码器必须解包到磁盘，asar 内的文件无法被 fetch 的 file:// 直接读取
 asar: true
-asarUnpack:
-  - out/renderer/decoders/**/*
 
 extraResources:
+  # DRACO / KTX2 解码器必须是磁盘上的真实文件，asar 里的文件无法被 fetch 直接读
   - from: node_modules/three/examples/jsm/libs/draco/
     to: decoders/draco/
   - from: node_modules/three/examples/jsm/libs/basis/
     to: decoders/basis/
-  # Blender 无头导出脚本，必须是磁盘上的真实文件（-P 读不了 asar 里的）
+  - from: node_modules/three/examples/jsm/libs/rhino3dm/
+    to: decoders/rhino3dm/
+  # Blender 脚本同理（-P 读不了 asar 里的）
   - from: resources/blender_export_glb.py
     to: blender_export_glb.py
+  - from: resources/blender_import.py
+    to: blender_import.py
+  # 内置 HDRI 环境光（Poly Haven，CC0）
+  - from: resources/hdri/
+    to: hdri/
 
 win:
   icon: build/icon.ico
-  # dir target = win-unpacked 文件夹，解压即用的真绿色版
+  # dir = win-unpacked 文件夹，解压即用的真绿色版；zip 就是它的压缩包，直接分发
   # 不用 portable（自解压 exe 每次启动都往 temp 释放，慢且不干净）
   target:
     - target: dir
       arch: [x64]
-  artifactName: ${productName}-${version}-${arch}.${ext}
-
-compression: maximum
+    - target: zip
+      arch: [x64]
+  artifactName: ${productName}-v${version}-win64-绿色版.${ext}

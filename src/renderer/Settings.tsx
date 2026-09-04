@@ -6,13 +6,14 @@ interface Props {
   blender: BlenderInfo | null
   onClose: () => void
   onSave: (patch: Partial<AppSettings>) => Promise<void>
-  onBlenderRedetect: () => Promise<BlenderInfo>
+  onBlenderRedetect: (path: string | null) => Promise<BlenderInfo>
 }
 
 function fmtBytes(b: number): string {
   if (b < 1024) return `${b} B`
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`
-  return `${(b / 1024 / 1024).toFixed(1)} MB`
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`
 }
 
 export default function Settings({
@@ -23,15 +24,25 @@ export default function Settings({
   onBlenderRedetect
 }: Props): JSX.Element {
   const [local, setLocal] = useState<AppSettings>(settings)
-  const [cache, setCache] = useState<{ dir: string; files: number; bytes: number } | null>(
-    null
-  )
+  const [cache, setCache] = useState<{ dir: string; files: number; bytes: number } | null>(null)
   const [bl, setBl] = useState<BlenderInfo | null>(blender)
   const [busy, setBusy] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
 
   useEffect(() => {
     void window.api.cacheInfo().then(setCache)
   }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
 
   function patch(p: Partial<AppSettings>): void {
     setLocal((v) => ({ ...v, ...p }))
@@ -48,13 +59,19 @@ export default function Settings({
     onClose()
   }
 
+  const note = (text: string): JSX.Element => (
+    <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>{text}</span>
+  )
+
   return (
     <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal settings" onClick={(e) => e.stopPropagation()}>
         <h3>设置</h3>
 
+        <h4 className="section">缩略图</h4>
+
         <div className="field">
-          <label>缩略图分辨率</label>
+          <label>分辨率</label>
           <div className="ctl">
             <select
               value={local.thumbSize}
@@ -65,9 +82,31 @@ export default function Settings({
               <option value={768}>768 px</option>
               <option value={1024}>1024 px（慢、占空间）</option>
             </select>
-            <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>
-              改动后会清空缓存重出
-            </span>
+            {note('改动后按新分辨率重新出图，旧缓存保留')}
+          </div>
+        </div>
+
+        <div className="field">
+          <label>光照</label>
+          <div className="ctl">
+            <select
+              value={local.lighting}
+              onChange={(e) => patch({ lighting: e.target.value as AppSettings['lighting'] })}
+            >
+              <option value="studio">影棚光（默认）</option>
+              <option value="outdoor">室外光</option>
+              <option value="neutral">中性光</option>
+            </select>
+            <select
+              value={local.background}
+              onChange={(e) => patch({ background: e.target.value as AppSettings['background'] })}
+            >
+              <option value="transparent">透明背景</option>
+              <option value="dark">深灰背景</option>
+              <option value="light">浅灰背景</option>
+              <option value="white">纯白背景</option>
+            </select>
+            {note('同时是查看器的默认光照')}
           </div>
         </div>
 
@@ -82,29 +121,47 @@ export default function Settings({
               onChange={(e) => patch({ concurrency: Number(e.target.value) })}
             />
             <b>{local.concurrency}</b>
-            <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>
-              越多越快，但更吃显存
-            </span>
+            {note('越多越快，但更吃显存')}
           </div>
         </div>
 
+        <h4 className="section">扫描</h4>
+
         <div className="field">
-          <label>递归扫描子文件夹</label>
+          <label>递归子文件夹</label>
           <div className="ctl">
             <input
               type="checkbox"
               checked={local.recursive}
               onChange={(e) => patch({ recursive: e.target.checked })}
             />
-            <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>最大深度</span>
+            {note('最大深度')}
             <input
-              type="text"
-              value={String(local.maxDepth)}
-              onChange={(e) => patch({ maxDepth: Number(e.target.value) || 1 })}
-              style={{ width: 52 }}
+              type="number"
+              min={1}
+              max={32}
+              value={local.maxDepth}
+              onChange={(e) =>
+                patch({ maxDepth: Math.max(1, Math.min(32, Number(e.target.value) || 1)) })
+              }
+              style={{ width: 64 }}
             />
           </div>
         </div>
+
+        <div className="field">
+          <label>列出无法预览的格式</label>
+          <div className="ctl">
+            <input
+              type="checkbox"
+              checked={local.showUnsupported}
+              onChange={(e) => patch({ showUnsupported: e.target.checked })}
+            />
+            {note('.max / .c4d / .ma / .skp 等私有格式也显示成卡片，可拖出和用默认程序打开')}
+          </div>
+        </div>
+
+        <h4 className="section">Blender</h4>
 
         <div className="field">
           <label>.blend 自动转换</label>
@@ -114,9 +171,7 @@ export default function Settings({
               checked={local.blendAutoConvert}
               onChange={(e) => patch({ blendAutoConvert: e.target.checked })}
             />
-            <span style={{ color: 'var(--fg-faint)', fontSize: 12 }}>
-              后台调 Blender 转 GLB，换取完整 3D 交互
-            </span>
+            {note('后台调 Blender 转 GLB，换取完整 3D 交互')}
           </div>
         </div>
 
@@ -125,7 +180,7 @@ export default function Settings({
           <div className="ctl">
             <input
               type="text"
-              placeholder="留空则自动探测"
+              placeholder="留空则自动探测（blender.exe 或其所在目录）"
               value={local.blenderPath ?? ''}
               onChange={(e) => patch({ blenderPath: e.target.value || null })}
               style={{ flex: 1 }}
@@ -133,7 +188,7 @@ export default function Settings({
             <button
               onClick={() => {
                 setBusy(true)
-                void onBlenderRedetect().then((i) => {
+                void onBlenderRedetect(local.blenderPath).then((i) => {
                   setBl(i)
                   setBusy(false)
                 })
@@ -162,24 +217,68 @@ export default function Settings({
           )}
         </p>
 
-        <div className="field" style={{ marginTop: 10 }}>
+        <h4 className="section">缓存与系统</h4>
+
+        <div className="field">
+          <label>缓存上限</label>
+          <div className="ctl">
+            <select
+              value={local.cacheLimitMB}
+              onChange={(e) => patch({ cacheLimitMB: Number(e.target.value) })}
+            >
+              <option value={512}>512 MB</option>
+              <option value={1024}>1 GB</option>
+              <option value={2048}>2 GB</option>
+              <option value={4096}>4 GB</option>
+              <option value={8192}>8 GB</option>
+              <option value={0}>不限制</option>
+            </select>
+            {note('超出后自动删除最久没用的缩略图')}
+          </div>
+        </div>
+
+        <div className="field">
           <label>缓存</label>
           <div className="ctl">
             <span style={{ color: 'var(--fg-dim)', fontSize: 12 }}>
               {cache ? `${cache.files} 个文件 · ${fmtBytes(cache.bytes)}` : '统计中…'}
             </span>
-            <button
-              onClick={() => {
-                setBusy(true)
-                void window.api.clearCache().then(async () => {
-                  setCache(await window.api.cacheInfo())
-                  setBusy(false)
-                })
-              }}
-              disabled={busy}
-            >
-              清空缓存
-            </button>
+            {!confirmClear ? (
+              <button onClick={() => setConfirmClear(true)} disabled={busy}>
+                清空缓存
+              </button>
+            ) : (
+              <>
+                {note('所有缩略图和转换结果都要重新生成，确定？')}
+                <button
+                  className="danger"
+                  onClick={() => {
+                    setBusy(true)
+                    setConfirmClear(false)
+                    void window.api.clearCache().then(async () => {
+                      setCache(await window.api.cacheInfo())
+                      setBusy(false)
+                    })
+                  }}
+                  disabled={busy}
+                >
+                  确定清空
+                </button>
+                <button onClick={() => setConfirmClear(false)}>取消</button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="field">
+          <label>关闭 GPU 加速</label>
+          <div className="ctl">
+            <input
+              type="checkbox"
+              checked={local.disableGpu}
+              onChange={(e) => patch({ disableGpu: e.target.checked })}
+            />
+            {note('显卡驱动有问题、缩略图全部失败时可以试试；改动后需重启程序')}
           </div>
         </div>
 

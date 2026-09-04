@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import zlib from 'node:zlib'
 import { PNG } from 'pngjs'
+import { Decompress as ZstdDecompress } from 'fzstd'
 
 /**
  * 从 .blend 文件里直接抠出 Blender 保存时内嵌的预览图。
@@ -32,6 +33,14 @@ export interface BlendHeader {
   minor: number
   pointerSize: 4 | 8
   littleEndian: boolean
+  /** 文件头字节数：旧格式 12，Blender 5.x 的新格式 17 */
+  headerSize: number
+  /**
+   * 块头布局。
+   *   legacy: code[4] size[4] old[ptr] sdna[4] count[4]        （20 或 24 字节）
+   *   large:  code[4] sdna[4] old[8]  size[8] count[8]         （32 字节，Blender 5.x）
+   */
+  bhead: 'legacy' | 'large'
 }
 
 /**
@@ -65,14 +74,14 @@ async function readHead(filePath: string, budget = HEAD_BUDGET): Promise<Buffer 
   }
   await fh.close().catch(() => {})
 
-  let decompressor: zlib.Gzip | zlib.Gunzip | NodeJS.ReadWriteStream | null = null
+  let decompressor: NodeJS.ReadWriteStream | null = null
   if (magic.subarray(0, 2).equals(GZIP_MAGIC)) {
     decompressor = zlib.createGunzip()
   } else if (magic.equals(ZSTD_MAGIC)) {
-    // Blender 3.0+ 默认压缩改用 zstd；Node 22+/24 的 zlib 已原生支持，无需第三方模块
-    const anyZlib = zlib as unknown as { createZstdDecompress?: () => NodeJS.ReadWriteStream }
-    if (typeof anyZlib.createZstdDecompress !== 'function') return null
-    decompressor = anyZlib.createZstdDecompress()
+    // Blender 3.0+ 的压缩格式是 zstd，而且写的是多帧（seekable）格式：
+    // Node 自带的 zlib.createZstdDecompress 只解第一帧就报 "Unknown frame descriptor"，
+    // 而 Electron 33 内置的 Node 20 压根没有 zstd。两种情况都走纯 JS 的 fzstd。
+    return await readZstdHeadJs(filePath, budget)
   } else {
     return null
   }
@@ -107,14 +116,80 @@ async function readHead(filePath: string, budget = HEAD_BUDGET): Promise<Buffer 
   })
 }
 
+/** 纯 JS 的 zstd 流式解压，拿够 budget 字节就停 */
+function readZstdHeadJs(filePath: string, budget: number): Promise<Buffer | null> {
+  return new Promise<Buffer | null>((resolve) => {
+    const chunks: Buffer[] = []
+    let total = 0
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      resolve(chunks.length ? Buffer.concat(chunks) : null)
+    }
+    const src = fs.createReadStream(filePath)
+    const dec = new ZstdDecompress((chunk) => {
+      chunks.push(Buffer.from(chunk))
+      total += chunk.length
+      if (total >= budget) {
+        src.destroy()
+        finish()
+      }
+    })
+    src.on('data', (c: Buffer | string) => {
+      if (settled) return
+      try {
+        dec.push(new Uint8Array(typeof c === 'string' ? Buffer.from(c) : c))
+      } catch {
+        src.destroy()
+        finish()
+      }
+    })
+    src.on('end', () => {
+      try {
+        dec.push(new Uint8Array(0), true)
+      } catch {
+        /* 尾帧不完整也无所谓，前面的数据已经够了 */
+      }
+      finish()
+    })
+    src.on('error', finish)
+    src.on('close', finish)
+  })
+}
+
 export function parseHeader(buf: Buffer): BlendHeader | null {
   if (buf.length < 12) return null
   if (buf.subarray(0, 7).toString('latin1') !== 'BLENDER') return null
 
-  const ptrChar = String.fromCharCode(buf[7])
-  const endChar = String.fromCharCode(buf[8])
-  const pointerSize: 4 | 8 = ptrChar === '_' ? 4 : 8
-  const littleEndian = endChar === 'v'
+  // Blender 5.0 起的新文件头：
+  //   "BLENDER" + 头长度两位数字("17") + 指针宽度('-') + 块头版本("01") + 字节序('v') + 四位版本("0501")
+  // 旧文件头：
+  //   "BLENDER" + 指针宽度('_'/'-') + 字节序('v'/'V') + 三位版本("405")
+  const c7 = String.fromCharCode(buf[7])
+  const c8 = String.fromCharCode(buf[8])
+  if (/\d/.test(c7) && /\d/.test(c8)) {
+    const headerSize = parseInt(buf.subarray(7, 9).toString('latin1'), 10)
+    if (!Number.isFinite(headerSize) || buf.length < headerSize) return null
+    const pointerSize: 4 | 8 = String.fromCharCode(buf[9]) === '_' ? 4 : 8
+    const littleEndian = String.fromCharCode(buf[12]) === 'v'
+    const verNum = parseInt(buf.subarray(13, 17).toString('latin1'), 10)
+    if (!Number.isFinite(verNum)) return null
+    const major = Math.floor(verNum / 100)
+    const minor = verNum % 100
+    return {
+      version: `${major}.${minor}`,
+      major,
+      minor,
+      pointerSize,
+      littleEndian,
+      headerSize,
+      bhead: 'large'
+    }
+  }
+
+  const pointerSize: 4 | 8 = c7 === '_' ? 4 : 8
+  const littleEndian = c8 === 'v'
 
   const verRaw = buf.subarray(9, 12).toString('latin1')
   const verNum = parseInt(verRaw, 10)
@@ -130,8 +205,33 @@ export function parseHeader(buf: Buffer): BlendHeader | null {
     major,
     minor,
     pointerSize,
-    littleEndian
+    littleEndian,
+    headerSize: 12,
+    bhead: 'legacy'
   }
+}
+
+interface BlockHead {
+  code: string
+  size: number
+  dataOff: number
+}
+
+/** 读一个 file-block 的头，返回 null 表示越界或非法 */
+function readBlockHead(buf: Buffer, off: number, h: BlendHeader): BlockHead | null {
+  if (h.bhead === 'large') {
+    if (off + 32 > buf.length) return null
+    const code = buf.subarray(off, off + 4).toString('latin1')
+    const size = Number(h.littleEndian ? buf.readBigInt64LE(off + 16) : buf.readBigInt64BE(off + 16))
+    if (!Number.isFinite(size) || size < 0) return null
+    return { code, size, dataOff: off + 32 }
+  }
+  const headSize = 16 + h.pointerSize
+  if (off + headSize > buf.length) return null
+  const code = buf.subarray(off, off + 4).toString('latin1')
+  const size = h.littleEndian ? buf.readInt32LE(off + 4) : buf.readInt32BE(off + 4)
+  if (size < 0) return null
+  return { code, size, dataOff: off + headSize }
 }
 
 /** 只读 .blend 头部拿版本号，用于挑选合适的 Blender 去转换 */
@@ -180,21 +280,16 @@ export async function extractBlendThumb(filePath: string): Promise<EmbeddedThumb
   const header = parseHeader(buf)
   if (!header) return null
 
-  const { pointerSize, littleEndian } = header
-  const blockHeaderSize = 16 + pointerSize
+  const { littleEndian } = header
   const readI32 = (b: Buffer, o: number): number =>
     littleEndian ? b.readInt32LE(o) : b.readInt32BE(o)
 
-  let off = 12
+  let off = header.headerSize
   // TEST 块总在文件最前面（紧跟 REND），扫几十个块还没有就是真没有
   for (let guard = 0; guard < 256; guard++) {
-    if (off + blockHeaderSize > buf.length) return null
-
-    const code = buf.subarray(off, off + 4).toString('latin1')
-    const size = readI32(buf, off + 4)
-    if (size < 0) return null
-
-    const dataOff = off + blockHeaderSize
+    const bh = readBlockHead(buf, off, header)
+    if (!bh) return null
+    const { code, size, dataOff } = bh
 
     if (code === 'ENDB') return null
 
