@@ -2093,6 +2093,10 @@ select option {
   gap: 10px;
   margin-top: 8px;
 }
+/* 测量条也在顶部正中，提示往下挪一行别盖住它 */
+.measure-hud ~ .vwarn {
+  top: 62px;
+}
 .viewer .vwarn {
   position: absolute;
   top: 14px;
