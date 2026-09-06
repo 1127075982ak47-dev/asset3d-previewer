@@ -1,19 +1,25 @@
+import { useEscape } from './Dialogs'
+
 interface Props {
   onClose: () => void
 }
 
 const GROUPS: { title: string; rows: [string, string][] }[] = [
   {
-    title: '网格',
+    title: '网格 / 列表',
     rows: [
       ['Ctrl+O', '打开文件夹'],
       ['F5', '重新扫描'],
       ['Ctrl+F', '搜索'],
+      ['Ctrl+L', '网格 / 列表视图'],
       ['双击 / Enter', '放大查看'],
       ['方向键 / Home / End / PgUp / PgDn', '移动焦点'],
       ['Ctrl+点击 / Shift+点击 / Ctrl+A', '多选 / 连选 / 全选'],
       ['Ctrl+D', '收藏 / 取消收藏'],
-      ['Ctrl+B', '文件夹侧栏'],
+      ['0 – 5', '评分（0 清除）'],
+      ['F2', '重命名'],
+      ['Delete', '删除到回收站'],
+      ['Ctrl+B', '侧栏'],
       ['Ctrl+= / Ctrl+-', '放大 / 缩小卡片'],
       ['Esc', '取消选择 / 关闭弹层'],
       ['拖拽卡片到窗口外', '拖进 Blender / Unity / 资源管理器']
@@ -24,13 +30,19 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
     rows: [
       ['左键拖拽 / 滚轮 / 右键拖拽', '旋转 / 缩放 / 平移'],
       ['← →', '上一个 / 下一个'],
-      ['F', '重置视角'],
+      ['F / 双击', '重置视角'],
       ['1 / 3 / 7 / 5', '前视 / 侧视 / 顶视 / 等轴'],
+      ['右下角导航球', '点轴向切视角'],
       ['W', '线框'],
       ['G', '地面网格'],
       ['R', '自动旋转'],
+      ['M', '两点测量'],
+      ['X', '剖切平面'],
+      ['B / N', '骨骼 / 顶点法线'],
       ['空格', '播放 / 暂停动画'],
-      ['Esc', '返回网格']
+      ['Tab', '显示 / 隐藏面板'],
+      ['Ctrl+D', '收藏'],
+      ['Esc', '退出测量 / 返回网格']
     ]
   },
   {
@@ -44,6 +56,7 @@ const GROUPS: { title: string; rows: [string, string][] }[] = [
 ]
 
 export default function ShortcutsDialog({ onClose }: Props): JSX.Element {
+  useEscape(onClose)
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal shortcuts" onClick={(e) => e.stopPropagation()}>

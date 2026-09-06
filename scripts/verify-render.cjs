@@ -145,7 +145,7 @@ app.whenReady().then(async () => {
   fs.mkdirSync(OUT, { recursive: true })
 
   // ---- 1. 扫描：验证伴生文件抑制 ----
-  const MESH = ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.ply', '.dae', '.3ds', '.3mf', '.wrl', '.vrm']
+  const MESH = ['.glb', '.gltf', '.fbx', '.obj', '.stl', '.ply', '.dae', '.3ds', '.3mf', '.wrl', '.vrm', '.bvh']
   const all = []
   ;(function walk(dir, depth) {
     if (depth > 6) return

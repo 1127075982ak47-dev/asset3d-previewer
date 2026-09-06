@@ -192,3 +192,126 @@ export const IconSort = (p: IconProps & { desc?: boolean } = {}): JSX.Element =>
     ),
     p
   )
+
+/* ---------------- 1.2 新增 ---------------- */
+
+export const IconGrid = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <rect x="3" y="3" width="8" height="8" rx="2" />
+      <rect x="13" y="3" width="8" height="8" rx="2" />
+      <rect x="3" y="13" width="8" height="8" rx="2" />
+      <rect x="13" y="13" width="8" height="8" rx="2" />
+    </>,
+    p
+  )
+
+export const IconList = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M8 6h13M8 12h13M8 18h13" />
+      <circle cx="4" cy="6" r="1" fill="currentColor" />
+      <circle cx="4" cy="12" r="1" fill="currentColor" />
+      <circle cx="4" cy="18" r="1" fill="currentColor" />
+    </>,
+    p
+  )
+
+export const IconTrash = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M4 7h16" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M6 7l1 13h10l1-13" />
+      <path d="M9 7V4h6v3" />
+    </>,
+    p
+  )
+
+export const IconRename = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M4 20h4l10.5-10.5a2 2 0 0 0 0-2.8l-1.2-1.2a2 2 0 0 0-2.8 0L4 16z" />
+      <path d="M13 6l5 5" />
+    </>,
+    p
+  )
+
+export const IconMove = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M9 14h6" />
+      <path d="M13 11l3 3-3 3" />
+    </>,
+    p
+  )
+
+export const IconPin = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M12 17v5" />
+      <path d="M8 3h8l-1 7 3 3H6l3-3z" />
+    </>,
+    p
+  )
+
+export const IconCompare = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <rect x="3" y="4" width="8" height="16" rx="2" />
+      <rect x="13" y="4" width="8" height="16" rx="2" />
+      <path d="M7 9v6M17 9v6" />
+    </>,
+    p
+  )
+
+export const IconCsv = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+      <path d="M9 12h6M9 16h6" />
+    </>,
+    p
+  )
+
+export const IconDupes = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <rect x="8" y="8" width="13" height="13" rx="2" />
+      <path d="M4 16V5a2 2 0 0 1 2-2h11" />
+    </>,
+    p
+  )
+
+export const IconSun = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </>,
+    p
+  )
+
+export const IconMoon = (p: IconProps = {}): JSX.Element =>
+  base(<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />, p)
+
+export const IconRuler = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <path d="M3 17L17 3l4 4L7 21z" />
+      <path d="M7 11l2 2M10 8l2 2M13 5l2 2" />
+    </>,
+    p
+  )
+
+export const IconThumb = (p: IconProps = {}): JSX.Element =>
+  base(
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M3 15l5-5 4 4 3-3 6 6" />
+      <circle cx="16" cy="9" r="1.5" />
+    </>,
+    p
+  )

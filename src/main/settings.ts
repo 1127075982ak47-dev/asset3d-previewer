@@ -12,11 +12,22 @@ function file(): string {
 const THUMB_SIZES = new Set([256, 512, 768, 1024])
 const LIGHTINGS = new Set(['studio', 'outdoor', 'neutral'])
 const BACKGROUNDS = new Set(['transparent', 'dark', 'light', 'white'])
+const ANGLES = new Set(['iso', 'iso-left', 'front', 'top', 'side'])
+const SHADINGS = new Set(['material', 'clay', 'matcap'])
+const SORT_KEYS = new Set(['name', 'size', 'date', 'ext', 'tris', 'rating'])
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v)
   if (!Number.isFinite(n)) return fallback
   return Math.max(min, Math.min(max, Math.round(n)))
+}
+
+function bool(v: unknown, fallback: boolean): boolean {
+  return typeof v === 'boolean' ? v : fallback
+}
+
+function oneOf<T extends string>(v: unknown, set: Set<string>, fallback: T): T {
+  return set.has(String(v)) ? (v as T) : fallback
 }
 
 /**
@@ -27,29 +38,35 @@ export function sanitizeSettings(raw: Partial<AppSettings> | null | undefined): 
   const r = (raw ?? {}) as Record<string, unknown>
   const d = DEFAULT_SETTINGS
   const thumbSize = clampInt(r['thumbSize'], 128, 2048, d.thumbSize)
+  const pinned = Array.isArray(r['pinnedFolders'])
+    ? [...new Set((r['pinnedFolders'] as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== ''))]
+    : d.pinnedFolders
   return {
     thumbSize: THUMB_SIZES.has(thumbSize) ? thumbSize : d.thumbSize,
     concurrency: clampInt(r['concurrency'], 1, 6, d.concurrency),
-    recursive: typeof r['recursive'] === 'boolean' ? r['recursive'] : d.recursive,
+    recursive: bool(r['recursive'], d.recursive),
     maxDepth: clampInt(r['maxDepth'], 1, 32, d.maxDepth),
     blenderPath:
       typeof r['blenderPath'] === 'string' && r['blenderPath'].trim()
         ? r['blenderPath'].trim()
         : null,
-    blendAutoConvert:
-      typeof r['blendAutoConvert'] === 'boolean' ? r['blendAutoConvert'] : d.blendAutoConvert,
-    background: BACKGROUNDS.has(String(r['background']))
-      ? (r['background'] as AppSettings['background'])
-      : d.background,
-    lighting: LIGHTINGS.has(String(r['lighting']))
-      ? (r['lighting'] as AppSettings['lighting'])
-      : d.lighting,
-    sidebarVisible:
-      typeof r['sidebarVisible'] === 'boolean' ? r['sidebarVisible'] : d.sidebarVisible,
-    showUnsupported:
-      typeof r['showUnsupported'] === 'boolean' ? r['showUnsupported'] : d.showUnsupported,
+    blendAutoConvert: bool(r['blendAutoConvert'], d.blendAutoConvert),
+    background: oneOf(r['background'], BACKGROUNDS, d.background),
+    lighting: oneOf(r['lighting'], LIGHTINGS, d.lighting),
+    thumbAngle: oneOf(r['thumbAngle'], ANGLES, d.thumbAngle),
+    thumbShading: oneOf(r['thumbShading'], SHADINGS, d.thumbShading),
+    sidebarVisible: bool(r['sidebarVisible'], d.sidebarVisible),
+    showUnsupported: bool(r['showUnsupported'], d.showUnsupported),
     cacheLimitMB: clampInt(r['cacheLimitMB'], 0, 1024 * 1024, d.cacheLimitMB),
-    disableGpu: typeof r['disableGpu'] === 'boolean' ? r['disableGpu'] : d.disableGpu
+    disableGpu: bool(r['disableGpu'], d.disableGpu),
+    reopenLast: bool(r['reopenLast'], d.reopenLast),
+    lastFolder: typeof r['lastFolder'] === 'string' && r['lastFolder'].trim() ? r['lastFolder'] : null,
+    pinnedFolders: pinned.slice(0, 50),
+    cardSize: clampInt(r['cardSize'], 110, 360, d.cardSize),
+    sortKey: oneOf(r['sortKey'], SORT_KEYS, d.sortKey),
+    sortDir: r['sortDir'] === 'desc' ? 'desc' : 'asc',
+    viewMode: r['viewMode'] === 'list' ? 'list' : 'grid',
+    theme: r['theme'] === 'dark' ? 'dark' : 'light'
   }
 }
 

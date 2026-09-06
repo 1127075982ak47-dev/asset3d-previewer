@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { libKey } from '../shared/filters'
 import type { ModelEntry } from '../shared/types'
+
+export { libKey }
 
 interface Props {
   entries: ModelEntry[]
@@ -8,10 +11,6 @@ interface Props {
   onAdd: (tag: string) => Promise<void>
   onRemove: (tag: string) => Promise<void>
   onClose: () => void
-}
-
-export function libKey(entry: { path: string }): string {
-  return entry.path.toLowerCase()
 }
 
 /** 给一批模型加/减标签的小弹层 */

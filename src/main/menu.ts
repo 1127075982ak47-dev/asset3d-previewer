@@ -35,6 +35,11 @@ export function installMenu(deps: MenuDeps): void {
       click: () => deps.send('toggle-sidebar')
     },
     {
+      label: '网格 / 列表视图',
+      accelerator: 'CmdOrCtrl+L',
+      click: () => deps.send('toggle-view')
+    },
+    {
       label: '全屏',
       accelerator: 'F11',
       click: () => {
@@ -58,6 +63,9 @@ export function installMenu(deps: MenuDeps): void {
         { label: '打开文件夹…', accelerator: 'CmdOrCtrl+O', click: () => deps.send('open-folder') },
         { label: '最近打开', submenu: recentItems },
         { label: '重新扫描', accelerator: 'F5', click: () => deps.send('rescan') },
+        { type: 'separator' },
+        { label: '查找重复文件…', click: () => deps.send('find-dupes') },
+        { label: '导出清单 (CSV)…', click: () => deps.send('export-csv') },
         { type: 'separator' },
         { label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => deps.send('settings') },
         { type: 'separator' },

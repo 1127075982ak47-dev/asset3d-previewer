@@ -6,9 +6,11 @@ import * as THREE from 'three'
  * 材质替换的原则：永远不改动模型自带的材质对象，只在 mesh 上换引用，
  * 切回「材质」模式时把原引用放回去。这样任何模式切换都是无损的。
  */
-export type ShadingMode = 'material' | 'clay' | 'normals' | 'matcap' | 'uv' | 'wire' | 'xray'
+export type BaseMode = 'material' | 'clay' | 'normals' | 'matcap' | 'uv' | 'wire' | 'xray'
+export type ChannelMode = 'albedo' | 'roughness' | 'metalness' | 'normalmap' | 'ao' | 'emissive' | 'vertexcolor'
+export type ShadingMode = BaseMode | ChannelMode
 
-export const SHADING_MODES: { key: ShadingMode; label: string; hint: string }[] = [
+export const SHADING_MODES: { key: BaseMode; label: string; hint: string }[] = [
   { key: 'material', label: '材质', hint: '模型自带的材质与贴图（PBR）' },
   { key: 'clay', label: '白膜', hint: '统一的浅灰无贴图材质，看结构和布线' },
   { key: 'matcap', label: '雕塑', hint: 'Matcap 材质，类似 ZBrush 的观感' },
@@ -18,10 +20,26 @@ export const SHADING_MODES: { key: ShadingMode; label: string; hint: string }[] 
   { key: 'xray', label: '透视', hint: '半透明叠加，看内部结构' }
 ]
 
+/** 贴图通道检查：不受光照影响，直接把某一张贴图（或某个通道）画在模型上 */
+export const CHANNEL_MODES: { key: ChannelMode; label: string; hint: string }[] = [
+  { key: 'albedo', label: '基础色', hint: '只看 Base Color / 漫反射贴图，不受光照影响' },
+  { key: 'roughness', label: '粗糙度', hint: '粗糙度贴图（glTF 取 G 通道），越白越粗糙' },
+  { key: 'metalness', label: '金属度', hint: '金属度贴图（glTF 取 B 通道），越白越金属' },
+  { key: 'normalmap', label: '法线贴图', hint: '直接显示法线贴图的颜色' },
+  { key: 'ao', label: 'AO 贴图', hint: '环境光遮蔽贴图（R 通道），没有就是全白' },
+  { key: 'emissive', label: '自发光', hint: '自发光贴图 × 自发光颜色' },
+  { key: 'vertexcolor', label: '顶点色', hint: '几何体自带的顶点颜色，没有就显示灰色' }
+]
+
+export function isChannelMode(m: ShadingMode): m is ChannelMode {
+  return CHANNEL_MODES.some((c) => c.key === m)
+}
+
 type MatOrArr = THREE.Material | THREE.Material[]
 
 interface Holder {
   material: MatOrArr
+  geometry?: THREE.BufferGeometry
 }
 
 /** 程序化 Matcap：一个球面上的柔光 + 高光，不用往包里塞图片 */
@@ -91,6 +109,119 @@ export function makeCheckerTexture(size = 512): THREE.Texture {
 /** 线框叠加的三角面上限，再多 WireframeGeometry 会吃掉几百 MB 内存 */
 const WIRE_OVERLAY_MAX_TRIS = 1_500_000
 
+/* ------------------------------ 通道着色器 ------------------------------ */
+
+const CHANNEL_VERT = /* glsl */ `
+uniform mat3 uvTransform;
+uniform float useUv1;
+attribute vec2 uv1;
+varying vec2 vUv;
+void main() {
+  vec2 base = useUv1 > 0.5 ? uv1 : uv;
+  vUv = (uvTransform * vec3(base, 1.0)).xy;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`
+
+/**
+ * 数据类贴图（粗糙度 / 金属度 / 法线 / AO）要按原始数值显示：
+ * 先把原值当 sRGB 反解成线性，经输出编码后正好还原成原值。
+ * 颜色类贴图（基础色 / 自发光）采样得到的已是线性值，直接走输出编码。
+ */
+const CHANNEL_FRAG = /* glsl */ `
+uniform sampler2D map;
+uniform float hasMap;
+uniform int channel;
+uniform vec3 fallback;
+uniform vec3 tint;
+uniform float isColor;
+varying vec2 vUv;
+vec3 srgbToLinear3(vec3 c) {
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+void main() {
+  vec3 c = fallback;
+  if (hasMap > 0.5) {
+    vec4 t = texture2D(map, vUv);
+    if (channel == 0) c = t.rgb;
+    else if (channel == 1) c = vec3(t.r);
+    else if (channel == 2) c = vec3(t.g);
+    else if (channel == 3) c = vec3(t.b);
+    else c = vec3(t.a);
+  }
+  c *= tint;
+  if (isColor < 0.5) c = srgbToLinear3(clamp(c, 0.0, 1.0));
+  gl_FragColor = vec4(c, 1.0);
+  #include <colorspace_fragment>
+}
+`
+
+interface ChannelSpec {
+  slot: string
+  channel: number
+  isColor: boolean
+  fallback: (m: Record<string, unknown>) => THREE.Color
+  tint: (m: Record<string, unknown>) => THREE.Color
+}
+
+function scalar(m: Record<string, unknown>, key: string, def: number): number {
+  const v = m[key]
+  return typeof v === 'number' ? v : def
+}
+
+function colorProp(m: Record<string, unknown>, key: string, def: number): THREE.Color {
+  const v = m[key] as THREE.Color | undefined
+  return v && v.isColor ? v.clone() : new THREE.Color(def)
+}
+
+const CHANNEL_SPECS: Record<Exclude<ChannelMode, 'vertexcolor'>, ChannelSpec> = {
+  albedo: {
+    slot: 'map',
+    channel: 0,
+    isColor: true,
+    fallback: (m) => colorProp(m, 'color', 0xffffff),
+    tint: (m) => (m['map'] ? colorProp(m, 'color', 0xffffff) : new THREE.Color(1, 1, 1))
+  },
+  roughness: {
+    slot: 'roughnessMap',
+    channel: 2,
+    isColor: false,
+    fallback: (m) => new THREE.Color().setScalar(scalar(m, 'roughness', 0.5)),
+    tint: (m) => new THREE.Color().setScalar(m['roughnessMap'] ? scalar(m, 'roughness', 1) : 1)
+  },
+  metalness: {
+    slot: 'metalnessMap',
+    channel: 3,
+    isColor: false,
+    fallback: (m) => new THREE.Color().setScalar(scalar(m, 'metalness', 0)),
+    tint: (m) => new THREE.Color().setScalar(m['metalnessMap'] ? scalar(m, 'metalness', 1) : 1)
+  },
+  normalmap: {
+    slot: 'normalMap',
+    channel: 0,
+    isColor: false,
+    fallback: () => new THREE.Color(0.5, 0.5, 1),
+    tint: () => new THREE.Color(1, 1, 1)
+  },
+  ao: {
+    slot: 'aoMap',
+    channel: 1,
+    isColor: false,
+    fallback: () => new THREE.Color(1, 1, 1),
+    tint: () => new THREE.Color(1, 1, 1)
+  },
+  emissive: {
+    slot: 'emissiveMap',
+    channel: 0,
+    isColor: true,
+    fallback: (m) => colorProp(m, 'emissive', 0x000000).multiplyScalar(scalar(m, 'emissiveIntensity', 1)),
+    tint: (m) =>
+      m['emissiveMap']
+        ? colorProp(m, 'emissive', 0xffffff).multiplyScalar(scalar(m, 'emissiveIntensity', 1))
+        : new THREE.Color(1, 1, 1)
+  }
+}
+
 export class ShadingController {
   private root: THREE.Object3D | null = null
   private originals = new Map<Holder, MatOrArr>()
@@ -100,7 +231,9 @@ export class ShadingController {
   private matcap: THREE.MeshMatcapMaterial | null = null
   private uv: THREE.MeshBasicMaterial | null = null
   private xray: THREE.MeshBasicMaterial | null = null
-  /** 材质模式 + 平直着色 / 线框模式需要的克隆体，按原材质缓存 */
+  private vcolor: THREE.MeshBasicMaterial | null = null
+  private vcolorNone: THREE.MeshBasicMaterial | null = null
+  /** 材质模式 + 平直着色 / 线框模式 / 通道模式需要的克隆体，按原材质缓存 */
   private clones = new Map<string, THREE.Material>()
   private overlays: THREE.LineSegments[] = []
   private overlayMat = new THREE.LineBasicMaterial({
@@ -118,7 +251,7 @@ export class ShadingController {
     this.root = root
     root.traverse((o) => {
       const h = o as unknown as Holder
-      if ((o as THREE.Mesh).isMesh && h.material) this.originals.set(h, h.material)
+      if (((o as THREE.Mesh).isMesh || (o as THREE.Points).isPoints) && h.material) this.originals.set(h, h.material)
     })
   }
 
@@ -130,6 +263,16 @@ export class ShadingController {
     for (const c of this.clones.values()) c.dispose()
     this.clones.clear()
     this.root = null
+  }
+
+  /** 当前生效的所有材质（含原材质 / 克隆 / 共享），剖切平面要逐个设置 */
+  activeMaterials(): THREE.Material[] {
+    const out = new Set<THREE.Material>()
+    for (const h of this.originals.keys()) {
+      for (const m of Array.isArray(h.material) ? h.material : [h.material]) if (m) out.add(m)
+    }
+    out.add(this.overlayMat)
+    return [...out]
   }
 
   private ensureShared(): void {
@@ -158,6 +301,8 @@ export class ShadingController {
         blending: THREE.AdditiveBlending
       })
     }
+    if (!this.vcolor) this.vcolor = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })
+    if (!this.vcolorNone) this.vcolorNone = new THREE.MeshBasicMaterial({ color: 0x808080, side: THREE.DoubleSide })
   }
 
   private cloneFor(src: THREE.Material, kind: 'flat' | 'wire'): THREE.Material {
@@ -178,6 +323,41 @@ export class ShadingController {
     return c
   }
 
+  private channelFor(src: THREE.Material, mode: Exclude<ChannelMode, 'vertexcolor'>): THREE.Material {
+    const key = `${src.uuid}|${mode}`
+    let c = this.clones.get(key)
+    if (!c) {
+      const spec = CHANNEL_SPECS[mode]
+      const m = src as unknown as Record<string, unknown>
+      const tex = m[spec.slot] as THREE.Texture | undefined
+      const hasMap = !!(tex && tex.isTexture)
+      const uvTransform = new THREE.Matrix3()
+      if (hasMap) {
+        tex!.updateMatrix()
+        uvTransform.copy(tex!.matrix)
+      }
+      c = new THREE.ShaderMaterial({
+        vertexShader: CHANNEL_VERT,
+        fragmentShader: CHANNEL_FRAG,
+        uniforms: {
+          map: { value: hasMap ? tex : null },
+          hasMap: { value: hasMap ? 1 : 0 },
+          channel: { value: spec.channel },
+          fallback: { value: spec.fallback(m) },
+          tint: { value: spec.tint(m) },
+          isColor: { value: spec.isColor ? 1 : 0 },
+          uvTransform: { value: uvTransform },
+          useUv1: { value: hasMap && tex!.channel === 1 ? 1 : 0 }
+        },
+        side: THREE.DoubleSide,
+        toneMapped: false
+      })
+      c.name = `__channel_${mode}`
+      this.clones.set(key, c)
+    }
+    return c
+  }
+
   apply(mode: ShadingMode, flat: boolean): void {
     this.mode = mode
     this.flat = flat
@@ -193,7 +373,10 @@ export class ShadingController {
     }
 
     for (const [h, orig] of this.originals) {
+      const isPoints = !!(h as unknown as THREE.Points).isPoints
       const mapOne = (m: THREE.Material): THREE.Material => {
+        // 点云只有点材质能画，别的模式一律保持原样
+        if (isPoints) return m
         switch (mode) {
           case 'clay':
             return this.clay!
@@ -207,12 +390,27 @@ export class ShadingController {
             return this.xray!
           case 'wire':
             return this.cloneFor(m, 'wire')
+          case 'vertexcolor':
+            return h.geometry?.getAttribute('color') ? this.vcolor! : this.vcolorNone!
+          case 'albedo':
+          case 'roughness':
+          case 'metalness':
+          case 'normalmap':
+          case 'ao':
+          case 'emissive':
+            return this.channelFor(m, mode)
           default:
             return flat && 'flatShading' in m ? this.cloneFor(m, 'flat') : m
         }
       }
       h.material = Array.isArray(orig) ? orig.map(mapOne) : mapOne(orig)
     }
+  }
+
+  /** 有没有任何网格带顶点色（面板上给个提示） */
+  hasVertexColors(): boolean {
+    for (const h of this.originals.keys()) if (h.geometry?.getAttribute('color')) return true
+    return false
   }
 
   /**
@@ -264,6 +462,8 @@ export class ShadingController {
       this.uv.dispose()
     }
     this.xray?.dispose()
+    this.vcolor?.dispose()
+    this.vcolorNone?.dispose()
     this.overlayMat.dispose()
   }
 }

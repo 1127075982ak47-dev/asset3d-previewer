@@ -1,16 +1,42 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Grid from './Grid'
+import ListView from './ListView'
 import Viewer from './Viewer'
 import Settings from './Settings'
 import Sidebar from './Sidebar'
 import SelectionBar from './SelectionBar'
-import TagEditor, { libKey } from './TagEditor'
+import TagEditor from './TagEditor'
 import ExportDialog, { type ExportState } from './ExportDialog'
 import AboutDialog from './AboutDialog'
 import ShortcutsDialog from './ShortcutsDialog'
-import { buildTree, isUnderDir } from './lib/tree'
+import DupesDialog from './DupesDialog'
+import { ConfirmDialog, RenameDialog } from './Dialogs'
+import { ColorDots, RatingStars } from './RatingStars'
+import { buildTree } from './lib/tree'
 import { SHEET_MAX_ITEMS, renderContactSheet } from './lib/contactSheet'
-import { IconFolder, IconRefresh, IconSettings, IconSidebar, IconSort } from './icons'
+import {
+  EMPTY_FILTER,
+  TRI_RANGES,
+  filterEntries,
+  hasActiveFilter,
+  libKey,
+  needsThumbs,
+  sortEntries,
+  type FilterState
+} from '../shared/filters'
+import { buildInventoryCsv } from '../shared/csv'
+import { COLOR_LABELS } from '../shared/labels'
+import {
+  IconCsv,
+  IconDupes,
+  IconFolder,
+  IconGrid,
+  IconList,
+  IconRefresh,
+  IconSettings,
+  IconSidebar,
+  IconSort
+} from './icons'
 import type { Api } from '../preload'
 import type {
   AppSettings,
@@ -20,8 +46,11 @@ import type {
   ModelEntry,
   ScanProgress,
   ScanResult,
+  SortDir,
+  SortKey,
   ThumbRequest,
-  ThumbResult
+  ThumbResult,
+  ViewMode
 } from '../shared/types'
 
 declare global {
@@ -29,9 +58,6 @@ declare global {
     api: Api
   }
 }
-
-type SortKey = 'name' | 'size' | 'date' | 'ext' | 'tris'
-type SortDir = 'asc' | 'desc'
 
 interface Ctx {
   x: number
@@ -44,6 +70,8 @@ interface Lib {
   favorites: Set<string>
   tags: Record<string, string[]>
   allTags: string[]
+  ratings: Record<string, number>
+  colors: Record<string, string>
 }
 
 interface Toast {
@@ -51,10 +79,19 @@ interface Toast {
   kind: 'ok' | 'warn' | 'error'
 }
 
-const EMPTY_LIB: Lib = { favorites: new Set(), tags: {}, allTags: [] }
+interface Confirm {
+  title: string
+  message: React.ReactNode
+  confirmLabel: string
+  danger?: boolean
+  details?: string[]
+  onConfirm: () => void | Promise<void>
+}
+
+const EMPTY_LIB: Lib = { favorites: new Set(), tags: {}, allTags: [], ratings: {}, colors: {} }
 
 function toLib(p: LibraryPayload): Lib {
-  return { favorites: new Set(p.favorites), tags: p.tags, allTags: p.allTags }
+  return { favorites: new Set(p.favorites), tags: p.tags, allTags: p.allTags, ratings: p.ratings ?? {}, colors: p.colors ?? {} }
 }
 
 function basename(p: string): string {
@@ -63,15 +100,7 @@ function basename(p: string): string {
 }
 
 /** 右键菜单：按窗口边界钳位，别弹到屏幕外面去 */
-function ContextMenu({
-  x,
-  y,
-  children
-}: {
-  x: number
-  y: number
-  children: React.ReactNode
-}): JSX.Element {
+function ContextMenu({ x, y, children }: { x: number; y: number; children: React.ReactNode }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y })
   useLayoutEffect(() => {
@@ -97,25 +126,24 @@ export default function App(): JSX.Element {
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null)
   const [scanError, setScanError] = useState<string | null>(null)
   const [thumbs, setThumbs] = useState<Map<string, ThumbResult>>(new Map())
-  const [query, setQuery] = useState('')
-  const [extFilter, setExtFilter] = useState<Set<string>>(new Set())
-  const [favFilter, setFavFilter] = useState(false)
-  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set())
-  const [animFilter, setAnimFilter] = useState(false)
-  const [failedFilter, setFailedFilter] = useState(false)
-  const [dirFilter, setDirFilter] = useState('')
+  const [filter, setFilterRaw] = useState<FilterState>(EMPTY_FILTER)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [cardSize, setCardSize] = useState(168)
+  const [viewMode, setViewMode] = useState<ViewMode>('grid')
+  const [cardSize, setCardSize] = useState(176)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [focusedIndex, setFocusedIndex] = useState(-1)
   const anchorRef = useRef<number | null>(null)
   const [viewerIdx, setViewerIdx] = useState<number | null>(null)
+  const [compareEntry, setCompareEntry] = useState<ModelEntry | null>(null)
   const [ctx, setCtx] = useState<Ctx | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showDupes, setShowDupes] = useState(false)
   const [tagTarget, setTagTarget] = useState<ModelEntry[] | null>(null)
+  const [renameTarget, setRenameTarget] = useState<ModelEntry | null>(null)
+  const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [exportState, setExportState] = useState<ExportState | null>(null)
   const [failInfo, setFailInfo] = useState<{ entry: ModelEntry; error: string; missing: string[] } | null>(null)
   const [blender, setBlender] = useState<BlenderInfo | null>(null)
@@ -136,6 +164,10 @@ export default function App(): JSX.Element {
     toastTimer.current = setTimeout(() => setToastRaw(null), kind === 'error' ? 5000 : 2600)
   }, [])
 
+  const setFilter = useCallback((patch: Partial<FilterState>) => {
+    setFilterRaw((f) => ({ ...f, ...patch }))
+  }, [])
+
   /** 已经派过单的 id，避免同一个模型被反复丢进队列 */
   const requested = useRef<Set<string>>(new Set())
   /** 每次扫描递增；慢的那次回来时发现自己已经过时就直接丢弃 */
@@ -148,6 +180,11 @@ export default function App(): JSX.Element {
   const resubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const settingsRef = useRef<AppSettings | null>(null)
   settingsRef.current = settings
+  const thumbsRef = useRef(thumbs)
+  thumbsRef.current = thumbs
+  /** 设置就绪后才把界面状态（排序 / 视图 / 卡片大小）写回设置 */
+  const uiReady = useRef(false)
+  const uiSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refreshLib = useCallback(async () => {
     setLib(toLib(await window.api.library()))
@@ -162,11 +199,30 @@ export default function App(): JSX.Element {
       const s = await window.api.getSettings()
       setSettings(s)
       setSidebarVisible(s.sidebarVisible)
+      setSortKey(s.sortKey)
+      setSortDir(s.sortDir)
+      setViewMode(s.viewMode)
+      setCardSize(s.cardSize)
+      uiReady.current = true
       await refreshRecent()
       setBlender(await window.api.blenderInfo())
       await refreshLib()
     })()
   }, [refreshLib, refreshRecent])
+
+  // 主题：浅色玻璃拟态是默认，深色作为可选
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings?.theme ?? 'light'
+  }, [settings?.theme])
+
+  // 记住排序 / 视图 / 卡片大小
+  useEffect(() => {
+    if (!uiReady.current) return
+    if (uiSaveTimer.current) clearTimeout(uiSaveTimer.current)
+    uiSaveTimer.current = setTimeout(() => {
+      void window.api.saveSettings({ sortKey, sortDir, viewMode, cardSize })
+    }, 500)
+  }, [sortKey, sortDir, viewMode, cardSize])
 
   useEffect(() => {
     document.title = root ? `${basename(root)} - 3D 资源预览器` : '3D 资源预览器'
@@ -197,7 +253,9 @@ export default function App(): JSX.Element {
       px: s?.thumbSize ?? 512,
       priority,
       lighting: s?.lighting ?? 'studio',
-      background: s?.background ?? 'transparent'
+      background: s?.background ?? 'transparent',
+      angle: s?.thumbAngle ?? 'iso',
+      shading: s?.thumbShading ?? 'material'
     }
   }, [])
 
@@ -243,7 +301,7 @@ export default function App(): JSX.Element {
     [thumbReq]
   )
 
-  // .blend 的两段式出图靠这个通道推第二次结果（内嵌图 → 真渲染图）
+  // .blend 的两段式出图靠这个通道推第二次结果（内嵌图 → 真渲染图）；自定义缩略图也走它
   useEffect(() => {
     return window.api.onThumbProgress((r) => {
       if (r.state === 'pending') return
@@ -279,10 +337,9 @@ export default function App(): JSX.Element {
       setFocusedIndex(-1)
       anchorRef.current = null
       setViewerIdx(null)
+      setCompareEntry(null)
       setCtx(null)
-      setDirFilter('')
-      setExtFilter(new Set())
-      setFailedFilter(false)
+      setFilter({ dirFilter: '', exts: new Set(), failed: false, triRange: null })
       setRoot(target)
 
       try {
@@ -303,7 +360,7 @@ export default function App(): JSX.Element {
         if (seq === scanSeq.current) setScanning(false)
       }
     },
-    [refreshRecent, setToast]
+    [refreshRecent, setToast, setFilter]
   )
 
   useEffect(() => window.api.onScanProgress((p) => setScanProgress(p)), [])
@@ -326,67 +383,14 @@ export default function App(): JSX.Element {
     return [...m.entries()].sort((a, b) => b[1] - a[1])
   }, [scan])
 
-  const tree = useMemo(
-    () => (scan ? buildTree(scan.entries, basename(scan.root) || scan.root) : null),
-    [scan]
-  )
+  const tree = useMemo(() => (scan ? buildTree(scan.entries, basename(scan.root) || scan.root) : null), [scan])
 
-  const needsThumbs = animFilter || failedFilter || sortKey === 'tris'
-  const thumbsForFilter = needsThumbs ? thumbs : null
+  const thumbsForFilter = needsThumbs(filter, sortKey) ? thumbs : null
 
   const entries = useMemo(() => {
-    let list = scan?.entries ?? []
-    const q = query.trim().toLowerCase()
-    if (q) {
-      list = list.filter(
-        (e) =>
-          e.name.toLowerCase().includes(q) ||
-          e.rel.toLowerCase().includes(q) ||
-          (lib.tags[libKey(e)] ?? []).some((t) => t.toLowerCase().includes(q))
-      )
-    }
-    if (dirFilter) list = list.filter((e) => isUnderDir(e.rel, dirFilter))
-    if (extFilter.size > 0) list = list.filter((e) => extFilter.has(e.ext))
-    if (favFilter) list = list.filter((e) => lib.favorites.has(libKey(e)))
-    if (tagFilter.size > 0) {
-      list = list.filter((e) => (lib.tags[libKey(e)] ?? []).some((t) => tagFilter.has(t)))
-    }
-    if (thumbsForFilter) {
-      if (animFilter) {
-        list = list.filter((e) => (thumbsForFilter.get(e.id)?.stats?.animations.length ?? 0) > 0)
-      }
-      if (failedFilter) list = list.filter((e) => thumbsForFilter.get(e.id)?.state === 'failed')
-    }
-
-    const sorted = [...list]
-    const dir = sortDir === 'asc' ? 1 : -1
-    sorted.sort((a, b) => {
-      switch (sortKey) {
-        case 'size':
-          return (a.size - b.size) * dir
-        case 'date':
-          return (a.mtimeMs - b.mtimeMs) * dir
-        case 'ext':
-          return (
-            a.ext.localeCompare(b.ext) * dir || a.name.localeCompare(b.name, 'zh-CN')
-          )
-        case 'tris': {
-          const ta = thumbsForFilter?.get(a.id)?.stats?.triangles
-          const tb = thumbsForFilter?.get(b.id)?.stats?.triangles
-          // 还没出图的（未知）永远排最后
-          if (ta === undefined && tb === undefined) return 0
-          if (ta === undefined) return 1
-          if (tb === undefined) return -1
-          return (ta - tb) * dir
-        }
-        default:
-          return (
-            a.rel.localeCompare(b.rel, 'zh-CN', { numeric: true, sensitivity: 'base' }) * dir
-          )
-      }
-    })
-    return sorted
-  }, [scan, query, dirFilter, extFilter, favFilter, tagFilter, animFilter, failedFilter, thumbsForFilter, sortKey, sortDir, lib])
+    const list = filterEntries(scan?.entries ?? [], filter, lib, thumbsForFilter)
+    return sortEntries(list, sortKey, sortDir, lib, thumbsForFilter)
+  }, [scan, filter, thumbsForFilter, sortKey, sortDir, lib])
 
   /* ---------- 出图调度 ---------- */
 
@@ -403,6 +407,15 @@ export default function App(): JSX.Element {
     },
     [requestOne]
   )
+
+  const resubmitVisible = useCallback(() => {
+    requested.current = new Set()
+    setThumbs(new Map())
+    // Grid 的可见范围没变不会重新上报，手动补一次
+    setTimeout(() => {
+      for (const v of lastVisible.current) requestOne(v.entry, v.priority)
+    }, 50)
+  }, [requestOne])
 
   const doneCount = useMemo(() => {
     let n = 0
@@ -476,7 +489,7 @@ export default function App(): JSX.Element {
     }
   }, [ctx])
 
-  // 命令行 --folder=<路径> / 拖到 exe 上启动时自动打开（只在设置就绪后跑一次）
+  // 命令行 --folder=<路径> / 拖到 exe 上启动 / 上次的文件夹（只在设置就绪后跑一次）
   const bootedRef = useRef(false)
   useEffect(() => {
     if (!settings || bootedRef.current) return
@@ -514,10 +527,7 @@ export default function App(): JSX.Element {
     [entries]
   )
 
-  const selectedEntries = useMemo(
-    () => entries.filter((e) => selectedIds.has(e.id)),
-    [entries, selectedIds]
-  )
+  const selectedEntries = useMemo(() => entries.filter((e) => selectedIds.has(e.id)), [entries, selectedIds])
 
   /** 拖到外部程序。拖没被选中的卡片时，先把它变成唯一选中项 */
   const handleDragStart = useCallback(
@@ -535,7 +545,7 @@ export default function App(): JSX.Element {
       const paths = entries.filter((e) => ids.has(e.id)).map((e) => e.path)
       // 用被拖那一个的缩略图当拖拽图标
       const url = thumbs.get(entry.id)?.url
-      const key = url ? /([a-f0-9]{40})\.png$/.exec(url)?.[1] : null
+      const key = url ? /([a-f0-9]{40})\.png/.exec(url)?.[1] : null
       draggingOut.current = true
       // 系统级拖拽循环结束后不一定有 dragend，兜底 1.5 秒后自动解除
       setTimeout(() => {
@@ -546,7 +556,7 @@ export default function App(): JSX.Element {
     [entries, selectedIds, thumbs]
   )
 
-  /* ---------- 收藏与标签 ---------- */
+  /* ---------- 收藏 / 标签 / 评分 / 颜色 ---------- */
 
   const toggleFavorite = useCallback(
     async (targets: ModelEntry[]) => {
@@ -562,26 +572,163 @@ export default function App(): JSX.Element {
     [lib, refreshLib, setToast]
   )
 
+  const rate = useCallback(
+    async (targets: ModelEntry[], v: number) => {
+      if (targets.length === 0) return
+      setLib(toLib(await window.api.setRating(targets.map((e) => e.path), v)))
+      setToast(v === 0 ? '已清除评分' : `已评 ${v} 星`)
+    },
+    [setToast]
+  )
+
+  const setColor = useCallback(async (targets: ModelEntry[], c: string | null) => {
+    if (targets.length === 0) return
+    setLib(toLib(await window.api.setColor(targets.map((e) => e.path), c)))
+  }, [])
+
+  /* ---------- 文件操作 ---------- */
+
+  /** 把扫描结果里的一个条目换成新的（改名后） */
+  const replaceEntry = useCallback((oldId: string, next: ModelEntry, thumb: ThumbResult | undefined) => {
+    setScan((s) => (s ? { ...s, entries: s.entries.map((e) => (e.id === oldId ? next : e)) } : s))
+    setThumbs((prev) => {
+      const m = new Map(prev)
+      m.delete(oldId)
+      if (thumb) m.set(next.id, thumb)
+      return m
+    })
+    requested.current.delete(oldId)
+    if (thumb) requested.current.add(next.id)
+    setSelectedIds((prev) => {
+      if (!prev.has(oldId)) return prev
+      const n = new Set(prev)
+      n.delete(oldId)
+      n.add(next.id)
+      return n
+    })
+  }, [])
+
+  const doRename = useCallback(
+    async (entry: ModelEntry, newName: string): Promise<string | null> => {
+      if (!root) return '没有打开文件夹'
+      const r = await window.api.renameModel(entry, newName, root, thumbReq(0))
+      if (!r.ok || !r.entry) return r.error ?? '改名失败'
+      replaceEntry(entry.id, r.entry, r.thumb)
+      setRenameTarget(null)
+      setToast(`已改名为 ${r.entry.name}${r.entry.ext}${r.companions?.length ? '（.fbm 目录一起改了）' : ''}`)
+      return null
+    },
+    [root, thumbReq, replaceEntry, setToast]
+  )
+
+  const removeEntries = useCallback((ids: Set<string>) => {
+    setScan((s) => (s ? { ...s, entries: s.entries.filter((e) => !ids.has(e.id)) } : s))
+    setThumbs((prev) => {
+      const m = new Map(prev)
+      for (const id of ids) m.delete(id)
+      return m
+    })
+    for (const id of ids) requested.current.delete(id)
+    setSelectedIds((prev) => {
+      const n = new Set(prev)
+      for (const id of ids) n.delete(id)
+      return n
+    })
+    setViewerIdx(null)
+  }, [])
+
+  const trashEntries = useCallback(
+    (targets: ModelEntry[]) => {
+      if (targets.length === 0) return
+      setConfirm({
+        title: '删除到回收站',
+        message: (
+          <>
+            把 {targets.length === 1 ? `「${targets[0].name}${targets[0].ext}」` : `这 ${targets.length} 个文件`}
+            移到回收站？可以在资源管理器的回收站里找回。
+          </>
+        ),
+        details: targets.length > 1 ? targets.map((e) => e.rel) : undefined,
+        confirmLabel: '移到回收站',
+        danger: true,
+        onConfirm: async () => {
+          const r = await window.api.trashModels(targets.map((e) => e.path))
+          setConfirm(null)
+          const goneIds = new Set(targets.map((e) => e.id))
+          if (r.failed.length > 0) {
+            // 失败的留在列表里
+            const failedNames = new Set(r.failed.map((f) => f.split(':')[0]))
+            for (const e of targets) if (failedNames.has(`${e.name}${e.ext}`)) goneIds.delete(e.id)
+            setToast(`${r.done} 个已删除，${r.failed.length} 个失败`, 'error')
+          } else {
+            setToast(`已把 ${r.done} 个文件移到回收站`)
+          }
+          removeEntries(goneIds)
+          void refreshLib()
+        }
+      })
+    },
+    [removeEntries, refreshLib, setToast]
+  )
+
+  const moveEntries = useCallback(
+    async (targets: ModelEntry[]) => {
+      if (targets.length === 0 || !root) return
+      const dir = await window.api.pickFolder('选择要移动到的文件夹')
+      if (!dir) return
+      setConfirm({
+        title: '移动文件',
+        message: (
+          <>
+            把 {targets.length} 个模型移动到
+            <br />
+            <b className="wrap">{dir}</b>
+            <br />
+            .gltf 的 .bin 与贴图、.obj 的 .mtl 与贴图、.fbx 的 .fbm 目录会一起搬走。同名文件不会覆盖。
+          </>
+        ),
+        confirmLabel: '移动',
+        onConfirm: async () => {
+          const r = await window.api.moveModels(targets, dir)
+          setConfirm(null)
+          if (r.failed.length > 0) setToast(`移动了 ${r.moved} 个，${r.failed.length} 个失败：${r.failed[0]}`, 'error')
+          else setToast(`已移动 ${r.moved} 个文件`)
+          for (const e of targets) requested.current.delete(e.id)
+          // 移动改变了路径与 rel，重扫最省事；缩略图缓存按文件名+大小+时间命中，不会重新出图
+          void openFolder(root)
+        }
+      })
+    },
+    [root, openFolder, setToast]
+  )
+
+  const pinFolder = useCallback(
+    async (dir: string, pin: boolean) => {
+      const cur = settingsRef.current?.pinnedFolders ?? []
+      const next = pin
+        ? [...cur.filter((p) => p.toLowerCase() !== dir.toLowerCase()), dir]
+        : cur.filter((p) => p.toLowerCase() !== dir.toLowerCase())
+      setSettings(await window.api.saveSettings({ pinnedFolders: next }))
+      setToast(pin ? '已固定到资源库' : '已取消固定')
+    },
+    [setToast]
+  )
+
   /* ---------- 导出 ---------- */
 
-  const exportEntries = useCallback(
-    async (targets: ModelEntry[], toGlb: boolean) => {
-      if (targets.length === 0) return
-      const dir = await window.api.pickFolder(toGlb ? '选择 GLB 导出到哪个文件夹' : '选择导出到哪个文件夹')
-      if (!dir) return
-      setExportState({ total: targets.length, done: 0, name: '', dir })
-      const off = window.api.onExportProgress((p) =>
-        setExportState((s) => (s ? { ...s, done: p.done, name: p.name } : s))
-      )
-      try {
-        const result = await window.api.exportBatchTo(targets, dir, { toGlb })
-        setExportState((s) => (s ? { ...s, result } : s))
-      } finally {
-        off()
-      }
-    },
-    []
-  )
+  const exportEntries = useCallback(async (targets: ModelEntry[], toGlb: boolean) => {
+    if (targets.length === 0) return
+    const dir = await window.api.pickFolder(toGlb ? '选择 GLB 导出到哪个文件夹' : '选择导出到哪个文件夹')
+    if (!dir) return
+    setExportState({ total: targets.length, done: 0, name: '', dir })
+    const off = window.api.onExportProgress((p) => setExportState((s) => (s ? { ...s, done: p.done, name: p.name } : s)))
+    try {
+      const result = await window.api.exportBatchTo(targets, dir, { toGlb })
+      setExportState((s) => (s ? { ...s, result } : s))
+    } finally {
+      off()
+    }
+  }, [])
 
   const makeContactSheet = useCallback(
     async (targets: ModelEntry[]) => {
@@ -604,6 +751,30 @@ export default function App(): JSX.Element {
       }
     },
     [root, thumbs, setToast]
+  )
+
+  const exportCsv = useCallback(
+    async (targets: ModelEntry[]) => {
+      if (targets.length === 0) return
+      const csv = buildInventoryCsv(
+        targets.map((e) => {
+          const k = libKey(e)
+          const t = thumbs.get(e.id)
+          return {
+            entry: e,
+            stats: t?.stats,
+            state: t?.state,
+            favorite: lib.favorites.has(k),
+            tags: lib.tags[k] ?? [],
+            rating: lib.ratings[k] ?? 0,
+            color: lib.colors[k] ?? null
+          }
+        })
+      )
+      const saved = await window.api.exportText(`${root ? basename(root) : '模型'}-清单.csv`, csv, 'CSV 表格', 'csv')
+      if (saved) setToast(`清单已保存（${targets.length} 行）`)
+    },
+    [thumbs, lib, root, setToast]
   )
 
   const copyPaths = useCallback(
@@ -632,20 +803,53 @@ export default function App(): JSX.Element {
     [requestOne, thumbReq]
   )
 
-  const showFailure = useCallback(async (entry: ModelEntry) => {
-    const t = thumbs.get(entry.id)
-    let missing: string[] = []
-    try {
-      missing = (await window.api.dependencies(entry.path)).missing
-    } catch {
-      /* 查不了就算了 */
-    }
-    setFailInfo({ entry, error: t?.error ?? '未知错误', missing })
-  }, [thumbs])
+  const showFailure = useCallback(
+    async (entry: ModelEntry) => {
+      const t = thumbs.get(entry.id)
+      let missing: string[] = []
+      try {
+        missing = (await window.api.dependencies(entry.path)).missing
+      } catch {
+        /* 查不了就算了 */
+      }
+      setFailInfo({ entry, error: t?.error ?? '未知错误', missing })
+    },
+    [thumbs]
+  )
+
+  /* ---------- 对比 / 自定义缩略图 ---------- */
+
+  const compareSelected = useCallback(() => {
+    if (selectedEntries.length !== 2) return
+    const [a, b] = selectedEntries
+    const idx = entries.findIndex((e) => e.id === a.id)
+    if (idx < 0) return
+    setCompareEntry(b)
+    setViewerIdx(idx)
+  }, [selectedEntries, entries])
+
+  const getThumbUrl = useCallback((id: string) => thumbsRef.current.get(id)?.url, [])
+
+  const setCustomThumb = useCallback(
+    async (entry: ModelEntry, dataUrl: string) => {
+      const r = await window.api.setCustomThumb(entry, thumbReq(0), dataUrl)
+      setThumbs((prev) => {
+        const next = new Map(prev)
+        next.set(entry.id, r)
+        return next
+      })
+      requested.current.add(entry.id)
+      setToast('已把当前视角设为缩略图')
+    },
+    [thumbReq, setToast]
+  )
 
   /* ---------- 菜单 / 快捷键 ---------- */
 
-  const modalOpen = showSettings || showAbout || showShortcuts || !!tagTarget || !!exportState || !!failInfo
+  const modalOpen =
+    showSettings || showAbout || showShortcuts || showDupes || !!tagTarget || !!exportState || !!failInfo || !!renameTarget || !!confirm
+
+  const toggleView = useCallback(() => setViewMode((v) => (v === 'grid' ? 'list' : 'grid')), [])
 
   useEffect(() => {
     return window.api.onMenuAction((action: MenuAction) => {
@@ -660,7 +864,7 @@ export default function App(): JSX.Element {
           setShowSettings(true)
           break
         case 'zoom-in':
-          setCardSize((v) => Math.min(320, v + 20))
+          setCardSize((v) => Math.min(360, v + 20))
           break
         case 'zoom-out':
           setCardSize((v) => Math.max(110, v - 20))
@@ -671,6 +875,15 @@ export default function App(): JSX.Element {
             return !v
           })
           break
+        case 'toggle-view':
+          toggleView()
+          break
+        case 'find-dupes':
+          if (scan && scan.entries.length > 0) setShowDupes(true)
+          break
+        case 'export-csv':
+          void exportCsv(selectedEntries.length > 0 ? selectedEntries : entries)
+          break
         case 'shortcuts':
           setShowShortcuts(true)
           break
@@ -679,7 +892,7 @@ export default function App(): JSX.Element {
           break
       }
     })
-  }, [openFolder, root])
+  }, [openFolder, root, toggleView, scan, exportCsv, selectedEntries, entries])
 
   // 网格里的键盘操作。查看器 / 弹层打开时不响应
   useEffect(() => {
@@ -699,6 +912,7 @@ export default function App(): JSX.Element {
         if (e.key === 'Escape') (e.target as HTMLElement).blur()
         return
       }
+      const focused = focusedIndex >= 0 ? entries[focusedIndex] : undefined
       if (e.key === 'Enter') {
         const idx = focusedIndex >= 0 ? focusedIndex : entries.findIndex((x) => selectedIds.has(x.id))
         if (idx >= 0) setViewerIdx(idx)
@@ -708,6 +922,22 @@ export default function App(): JSX.Element {
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault()
         void toggleFavorite(selectedEntries)
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault()
+        toggleView()
+      } else if (e.key === 'Delete') {
+        e.preventDefault()
+        trashEntries(selectedEntries.length > 0 ? selectedEntries : focused ? [focused] : [])
+      } else if (e.key === 'F2') {
+        e.preventDefault()
+        const target = selectedEntries.length === 1 ? selectedEntries[0] : focused
+        if (target) setRenameTarget(target)
+      } else if (/^[0-5]$/.test(e.key) && !e.ctrlKey && !e.altKey) {
+        const targets = selectedEntries.length > 0 ? selectedEntries : focused ? [focused] : []
+        if (targets.length > 0) {
+          e.preventDefault()
+          void rate(targets, Number(e.key))
+        }
       } else if (e.key === 'Escape') {
         if (ctx) setCtx(null)
         else setSelectedIds(new Set())
@@ -715,15 +945,16 @@ export default function App(): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selectedIds, entries, viewerIdx, focusedIndex, modalOpen, ctx, toggleFavorite, selectedEntries])
+  }, [selectedIds, entries, viewerIdx, focusedIndex, modalOpen, ctx, toggleFavorite, selectedEntries, toggleView, trashEntries, rate])
 
-  const closeViewer = useCallback(() => setViewerIdx(null), [])
+  const closeViewer = useCallback(() => {
+    setViewerIdx(null)
+    setCompareEntry(null)
+  }, [])
   const toggleFavoriteOne = useCallback((e: ModelEntry) => void toggleFavorite([e]), [toggleFavorite])
+  const rateOne = useCallback((e: ModelEntry, v: number) => void rate([e], v), [rate])
 
-  const hasBlend = useMemo(
-    () => (scan?.entries ?? []).some((e) => e.ext === '.blend'),
-    [scan]
-  )
+  const hasBlend = useMemo(() => (scan?.entries ?? []).some((e) => e.ext === '.blend'), [scan])
 
   const ctxTargets = useMemo(() => {
     if (!ctx) return []
@@ -731,19 +962,66 @@ export default function App(): JSX.Element {
   }, [ctx, selectedIds, selectedEntries])
 
   const allSelectedFav = selectedEntries.length > 0 && selectedEntries.every((e) => lib.favorites.has(libKey(e)))
+  /** 选中项的共同评分 / 颜色（不一致就显示为空） */
+  const commonRating = useMemo(() => {
+    if (selectedEntries.length === 0) return 0
+    const first = lib.ratings[libKey(selectedEntries[0])] ?? 0
+    return selectedEntries.every((e) => (lib.ratings[libKey(e)] ?? 0) === first) ? first : 0
+  }, [selectedEntries, lib])
+  const commonColor = useMemo(() => {
+    if (selectedEntries.length === 0) return null
+    const first = lib.colors[libKey(selectedEntries[0])] ?? null
+    return selectedEntries.every((e) => (lib.colors[libKey(e)] ?? null) === first) ? first : null
+  }, [selectedEntries, lib])
+
+  const isPinned = !!root && (settings?.pinnedFolders ?? []).some((p) => p.toLowerCase() === root.toLowerCase())
+
+  const itemViewProps = {
+    entries,
+    thumbs,
+    favorites: lib.favorites,
+    tags: lib.tags,
+    ratings: lib.ratings,
+    colors: lib.colors,
+    selectedIds,
+    onSelect: select,
+    onOpen: setViewerIdx,
+    onDragStart: handleDragStart,
+    onToggleFavorite: toggleFavoriteOne,
+    onRate: rateOne,
+    onThumbError: (e: ModelEntry) => {
+      // 缓存被清掉了，图片 404：重新请求一次
+      requested.current.delete(e.id)
+      requestOne(e, 0)
+    },
+    focusedIndex,
+    onFocusIndex: (i: number) => select(i, 'single'),
+    keyboardEnabled: viewerIdx === null && !modalOpen && ctx === null,
+    onContext: (e: React.MouseEvent, entry: ModelEntry, index: number) => {
+      e.preventDefault()
+      if (!selectedIds.has(entry.id)) setSelectedIds(new Set([entry.id]))
+      setFocusedIndex(index)
+      setCtx({ x: e.clientX, y: e.clientY, entry, index })
+    },
+    onVisibleRange
+  }
 
   /* ---------- 渲染 ---------- */
 
   return (
     <div className="app">
-      <div className="toolbar">
+      <div className="toolbar main">
+        <div className="brand" title="3D 资源预览器">
+          <span className="brand-logo">🧊</span>
+          <span className="brand-name">3D 资源预览器</span>
+        </div>
         <button className="primary" onClick={() => void openFolder()} title="Ctrl+O">
           <IconFolder /> 打开文件夹
         </button>
         {root && (
           <>
-            <button onClick={() => void openFolder(root)} disabled={scanning} title="F5">
-              <IconRefresh /> 重新扫描
+            <button onClick={() => void openFolder(root)} disabled={scanning} title="重新扫描 (F5)">
+              <IconRefresh />
             </button>
             <button
               className={`icon-only${sidebarVisible ? ' on' : ''}`}
@@ -753,7 +1031,7 @@ export default function App(): JSX.Element {
                   return !v
                 })
               }
-              title="文件夹侧栏 (Ctrl+B)"
+              title="侧栏 (Ctrl+B)"
             >
               <IconSidebar />
             </button>
@@ -765,21 +1043,23 @@ export default function App(): JSX.Element {
 
         <div className="spacer" />
 
-        <input
-          ref={searchRef}
-          type="search"
-          placeholder="搜索名称 / 路径 / 标签…  (Ctrl+F)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          style={{ width: 220 }}
-        />
+        <div className="search-box">
+          <input
+            ref={searchRef}
+            type="search"
+            placeholder="搜索名称 / 路径 / 标签…  (Ctrl+F)"
+            value={filter.query}
+            onChange={(e) => setFilter({ query: e.target.value })}
+          />
+        </div>
 
-        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}>
+        <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)} title="排序">
           <option value="name">按名称</option>
           <option value="size">按大小</option>
           <option value="date">按修改时间</option>
           <option value="ext">按格式</option>
           <option value="tris">按面数</option>
+          <option value="rating">按评分</option>
         </select>
         <button
           className="icon-only"
@@ -789,18 +1069,29 @@ export default function App(): JSX.Element {
           <IconSort desc={sortDir === 'desc'} />
         </button>
 
-        <input
-          type="range"
-          min={110}
-          max={320}
-          step={2}
-          value={cardSize}
-          onChange={(e) => setCardSize(Number(e.target.value))}
-          title="缩略图大小 (Ctrl+= / Ctrl+-)"
-          style={{ width: 96 }}
-        />
+        <div className="seg view-seg" title="网格 / 列表 (Ctrl+L)">
+          <button className={viewMode === 'grid' ? 'on' : ''} onClick={() => setViewMode('grid')}>
+            <IconGrid />
+          </button>
+          <button className={viewMode === 'list' ? 'on' : ''} onClick={() => setViewMode('list')}>
+            <IconList />
+          </button>
+        </div>
 
-        <button onClick={() => setShowSettings(true)} title="Ctrl+,">
+        {viewMode === 'grid' && (
+          <input
+            type="range"
+            min={110}
+            max={360}
+            step={2}
+            value={cardSize}
+            onChange={(e) => setCardSize(Number(e.target.value))}
+            title="缩略图大小 (Ctrl+= / Ctrl+-)"
+            className="size-range"
+          />
+        )}
+
+        <button onClick={() => setShowSettings(true)} title="设置 (Ctrl+,)">
           <IconSettings /> 设置
         </button>
       </div>
@@ -808,9 +1099,7 @@ export default function App(): JSX.Element {
       {softwareGl && (
         <div className="banner warn">
           ⚠ 当前 3D 由 CPU 软件渲染（{softwareGl}），出图和查看器都会非常慢。
-          {settings?.disableGpu
-            ? ' 你在设置里关闭了 GPU 硬件加速，'
-            : ' 显卡驱动可能不可用，请更新显卡驱动；也可以'}
+          {settings?.disableGpu ? ' 你在设置里关闭了 GPU 硬件加速，' : ' 显卡驱动可能不可用，请更新显卡驱动；也可以'}
           <span className="link" onClick={() => setShowSettings(true)}>
             打开设置
           </span>
@@ -820,59 +1109,85 @@ export default function App(): JSX.Element {
 
       {scan && scan.entries.length > 0 && (
         <div className="toolbar chips">
-          <span
-            className={`chip${extFilter.size === 0 && !favFilter && tagFilter.size === 0 && !animFilter && !failedFilter ? ' on' : ''}`}
-            onClick={() => {
-              setExtFilter(new Set())
-              setFavFilter(false)
-              setTagFilter(new Set())
-              setAnimFilter(false)
-              setFailedFilter(false)
-            }}
-          >
+          <span className={`chip${!hasActiveFilter(filter) ? ' on' : ''}`} onClick={() => setFilter({ ...EMPTY_FILTER, query: filter.query, dirFilter: filter.dirFilter })}>
             全部 {scan.entries.length}
           </span>
           {available.map(([ext, n]) => (
             <span
               key={ext}
-              className={`chip${extFilter.has(ext) ? ' on' : ''}`}
-              onClick={() =>
-                setExtFilter((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(ext)) next.delete(ext)
-                  else next.add(ext)
-                  return next
-                })
-              }
+              className={`chip${filter.exts.has(ext) ? ' on' : ''}`}
+              onClick={() => {
+                const next = new Set(filter.exts)
+                if (next.has(ext)) next.delete(ext)
+                else next.add(ext)
+                setFilter({ exts: next })
+              }}
             >
               {ext.slice(1)} {n}
             </span>
           ))}
           <span className="chip-sep" />
-          <span className={`chip fav${favFilter ? ' on' : ''}`} onClick={() => setFavFilter((v) => !v)}>
+          <span className={`chip fav${filter.fav ? ' on' : ''}`} onClick={() => setFilter({ fav: !filter.fav })}>
             ★ 收藏
           </span>
-          <span className={`chip${animFilter ? ' on' : ''}`} onClick={() => setAnimFilter((v) => !v)} title="只看带动画的（需已出图）">
+          <span className={`chip${filter.anim ? ' on' : ''}`} onClick={() => setFilter({ anim: !filter.anim })} title="只看带动画的（需已出图）">
             ▶ 动画
           </span>
           {failedCount > 0 && (
-            <span className={`chip warn${failedFilter ? ' on' : ''}`} onClick={() => setFailedFilter((v) => !v)}>
+            <span className={`chip warn${filter.failed ? ' on' : ''}`} onClick={() => setFilter({ failed: !filter.failed })}>
               ⚠ 失败 {failedCount}
             </span>
           )}
+          <span className="chip-sep" />
+          {[3, 4, 5].map((n) => (
+            <span
+              key={n}
+              className={`chip rating${filter.minRating === n ? ' on' : ''}`}
+              onClick={() => setFilter({ minRating: filter.minRating === n ? 0 : n })}
+              title={`评分 ${n} 星及以上`}
+            >
+              {'★'.repeat(n)}
+              {n < 5 ? '+' : ''}
+            </span>
+          ))}
+          <span className="chip-colors">
+            {COLOR_LABELS.map((c) => (
+              <i
+                key={c.key}
+                className={`dot${filter.colors.has(c.key) ? ' on' : ''}`}
+                style={{ background: c.color }}
+                title={`颜色标签：${c.name}`}
+                onClick={() => {
+                  const next = new Set(filter.colors)
+                  if (next.has(c.key)) next.delete(c.key)
+                  else next.add(c.key)
+                  setFilter({ colors: next })
+                }}
+              />
+            ))}
+          </span>
+          <span className="chip-sep" />
+          {TRI_RANGES.map((r) => (
+            <span
+              key={r.key}
+              className={`chip${filter.triRange === r.key ? ' on' : ''}`}
+              onClick={() => setFilter({ triRange: filter.triRange === r.key ? null : r.key })}
+              title="按三角面数筛选（需已出图）"
+            >
+              {r.label}
+            </span>
+          ))}
           {lib.allTags.length > 0 && <span className="chip-sep" />}
           {lib.allTags.map((t) => (
             <span
               key={t}
-              className={`chip tag${tagFilter.has(t) ? ' on' : ''}`}
-              onClick={() =>
-                setTagFilter((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(t)) next.delete(t)
-                  else next.add(t)
-                  return next
-                })
-              }
+              className={`chip tag${filter.tags.has(t) ? ' on' : ''}`}
+              onClick={() => {
+                const next = new Set(filter.tags)
+                if (next.has(t)) next.delete(t)
+                else next.add(t)
+                setFilter({ tags: next })
+              }}
             >
               # {t}
             </span>
@@ -881,52 +1196,63 @@ export default function App(): JSX.Element {
       )}
 
       <div className="body">
-        {root && scan && sidebarVisible && tree && !scanning && (
-          <Sidebar tree={tree} selected={dirFilter} onSelect={setDirFilter} />
+        {sidebarVisible && (root || (settings?.pinnedFolders.length ?? 0) > 0) && (
+          <Sidebar
+            tree={root && scan && !scanning ? tree : null}
+            selected={filter.dirFilter}
+            onSelect={(rel) => setFilter({ dirFilter: rel })}
+            pinned={settings?.pinnedFolders ?? []}
+            current={root}
+            onOpen={(dir) => void openFolder(dir)}
+            onPin={(dir) => void pinFolder(dir, true)}
+            onUnpin={(dir) => void pinFolder(dir, false)}
+          />
         )}
 
         {!root ? (
-          <div className="empty">
-            <div style={{ fontSize: 46, opacity: 0.3 }}>🧊</div>
-            <h2>选择一个 3D 资源文件夹</h2>
-            <p>
-              自动为 glb / gltf / fbx / obj / stl / ply / dae / 3ds / blend 等几十种格式批量生成缩略图。
-              <br />
-              .bin、.mtl 和贴图会被自动识别为伴生文件并隐藏，只留下真正的模型。
-              <br />
-              选好的模型可以直接从窗口里拖进 Blender、Unity 等程序。
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="primary" onClick={() => void openFolder()}>
-                打开文件夹
-              </button>
-            </div>
-            <p style={{ fontSize: 12, opacity: 0.7 }}>也可以直接把文件夹拖进窗口，或拖到程序图标上</p>
-            {recent.length > 0 && (
-              <div className="recent">
-                <div style={{ fontSize: 12, marginBottom: 2 }}>最近打开</div>
-                {recent.slice(0, 8).map((r) => (
-                  <div key={r.dir} className={`recent-row${r.exists ? '' : ' gone'}`}>
-                    <button
-                      onClick={() => void openFolder(r.dir)}
-                      title={r.exists ? r.dir : `${r.dir}\n（目录不存在）`}
-                      disabled={!r.exists}
-                    >
-                      {r.dir}
-                    </button>
-                    <span
-                      className="remove"
-                      title="从列表移除"
-                      onClick={() => {
-                        void window.api.removeRecent(r.dir).then(() => void refreshRecent())
-                      }}
-                    >
-                      ×
-                    </span>
-                  </div>
-                ))}
+          <div className="empty hero">
+            <div className="hero-card">
+              <div className="hero-logo">🧊</div>
+              <h2>选择一个 3D 资源文件夹</h2>
+              <p>
+                自动为 glb / gltf / fbx / obj / stl / ply / dae / 3ds / blend 等几十种格式批量生成缩略图。
+                <br />
+                .bin、.mtl 和贴图会被自动识别为伴生文件并隐藏，只留下真正的模型。
+                <br />
+                选好的模型可以直接从窗口里拖进 Blender、Unity 等程序。
+              </p>
+              <div className="hero-actions">
+                <button className="primary big" onClick={() => void openFolder()}>
+                  <IconFolder /> 打开文件夹
+                </button>
               </div>
-            )}
+              <p className="hint">也可以直接把文件夹拖进窗口，或拖到程序图标上</p>
+              {recent.length > 0 && (
+                <div className="recent">
+                  <div className="recent-title">最近打开</div>
+                  {recent.slice(0, 8).map((r) => (
+                    <div key={r.dir} className={`recent-row${r.exists ? '' : ' gone'}`}>
+                      <button
+                        onClick={() => void openFolder(r.dir)}
+                        title={r.exists ? r.dir : `${r.dir}\n（目录不存在）`}
+                        disabled={!r.exists}
+                      >
+                        {r.dir}
+                      </button>
+                      <span
+                        className="remove"
+                        title="从列表移除"
+                        onClick={() => {
+                          void window.api.removeRecent(r.dir).then(() => void refreshRecent())
+                        }}
+                      >
+                        ×
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         ) : scanning ? (
           <div className="empty">
@@ -943,14 +1269,14 @@ export default function App(): JSX.Element {
           </div>
         ) : scanError ? (
           <div className="empty">
-            <div style={{ fontSize: 40, opacity: 0.3 }}>⚠</div>
+            <div className="empty-ico">⚠</div>
             <h2>打不开这个文件夹</h2>
             <p>{scanError}</p>
             <button onClick={() => void openFolder()}>选择其它文件夹</button>
           </div>
         ) : entries.length === 0 ? (
           <div className="empty">
-            <div style={{ fontSize: 40, opacity: 0.3 }}>∅</div>
+            <div className="empty-ico">∅</div>
             <h2>{scan && scan.entries.length > 0 ? '没有符合筛选条件的模型' : '没有找到可预览的模型'}</h2>
             <p>
               {scan && scan.entries.length > 0 ? (
@@ -964,33 +1290,20 @@ export default function App(): JSX.Element {
               )}
             </p>
           </div>
+        ) : viewMode === 'grid' ? (
+          <Grid {...itemViewProps} cardSize={cardSize} />
         ) : (
-          <Grid
-            entries={entries}
-            thumbs={thumbs}
-            favorites={lib.favorites}
-            tags={lib.tags}
-            cardSize={cardSize}
-            selectedIds={selectedIds}
-            onSelect={select}
-            onOpen={setViewerIdx}
-            onDragStart={handleDragStart}
-            onToggleFavorite={(e) => void toggleFavorite([e])}
-            onThumbError={(e) => {
-              // 缓存被清掉了，图片 404：重新请求一次
-              requested.current.delete(e.id)
-              requestOne(e, 0)
+          <ListView
+            {...itemViewProps}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={(k) => {
+              if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+              else {
+                setSortKey(k)
+                setSortDir(k === 'rating' || k === 'date' || k === 'size' || k === 'tris' ? 'desc' : 'asc')
+              }
             }}
-            focusedIndex={focusedIndex}
-            onFocusIndex={(i) => select(i, 'single')}
-            keyboardEnabled={viewerIdx === null && !modalOpen && ctx === null}
-            onContext={(e, entry, index) => {
-              e.preventDefault()
-              if (!selectedIds.has(entry.id)) setSelectedIds(new Set([entry.id]))
-              setFocusedIndex(index)
-              setCtx({ x: e.clientX, y: e.clientY, entry, index })
-            }}
-            onVisibleRange={onVisibleRange}
           />
         )}
       </div>
@@ -1000,8 +1313,17 @@ export default function App(): JSX.Element {
           count={selectedEntries.length}
           allFavorite={allSelectedFav}
           hasConvertible={selectedEntries.some((e) => e.previewable)}
+          canCompare={selectedEntries.length === 2 && selectedEntries.every((e) => e.previewable)}
+          rating={commonRating}
+          color={commonColor}
           onFavorite={() => void toggleFavorite(selectedEntries)}
+          onRate={(v) => void rate(selectedEntries, v)}
+          onColor={(c) => void setColor(selectedEntries, c)}
           onTags={() => setTagTarget(selectedEntries)}
+          onRename={() => setRenameTarget(selectedEntries[0])}
+          onMove={() => void moveEntries(selectedEntries)}
+          onTrash={() => trashEntries(selectedEntries)}
+          onCompare={compareSelected}
           onExport={() => void exportEntries(selectedEntries, false)}
           onExportGlb={() => void exportEntries(selectedEntries, true)}
           onContactSheet={() => void makeContactSheet(selectedEntries)}
@@ -1029,11 +1351,7 @@ export default function App(): JSX.Element {
             </>
           )}
           {failedCount > 0 && (
-            <span
-              style={{ color: 'var(--danger)', cursor: 'pointer' }}
-              onClick={() => setFailedFilter((v) => !v)}
-              title="点击只看失败的"
-            >
+            <span className="status-danger" onClick={() => setFilter({ failed: !filter.failed })} title="点击只看失败的">
               {failedCount} 个失败
             </span>
           )}
@@ -1043,23 +1361,34 @@ export default function App(): JSX.Element {
             </span>
           )}
           <div className="spacer" />
+          {scan && scan.entries.length > 0 && (
+            <>
+              <span className="status-btn" onClick={() => setShowDupes(true)} title="按文件内容查找完全相同的重复文件">
+                <IconDupes size={12} /> 查找重复
+              </span>
+              <span className="status-btn" onClick={() => void exportCsv(selectedEntries.length > 0 ? selectedEntries : entries)} title="把当前列表（或选中项）导出成 CSV 清单">
+                <IconCsv size={12} /> 导出清单
+              </span>
+              {!isPinned && (
+                <span className="status-btn" onClick={() => void pinFolder(root, true)} title="固定到侧栏资源库">
+                  固定文件夹
+                </span>
+              )}
+            </>
+          )}
           {hasBlend && (
             <span
-              style={{ color: blender?.available ? 'var(--ok)' : 'var(--warn)' }}
+              className={blender?.available ? 'status-ok' : 'status-warn'}
               title={
                 blender?.available
                   ? blender.installs.map((i) => i.version).join(' / ')
                   : '未检测到 Blender，.blend 只能显示内嵌预览图'
               }
             >
-              {blender?.available
-                ? `Blender ${blender.installs[blender.installs.length - 1]?.version} 就绪`
-                : '未检测到 Blender'}
+              {blender?.available ? `Blender ${blender.installs[blender.installs.length - 1]?.version} 就绪` : '未检测到 Blender'}
             </span>
           )}
-          <span style={{ color: 'var(--fg-faint)' }}>
-            双击放大 · 拖拽可直接拖入 Blender · Ctrl/Shift 多选 · F1 快捷键
-          </span>
+          <span className="status-hint">双击放大 · 拖拽可直接拖入 Blender · F1 快捷键</span>
         </div>
       )}
 
@@ -1081,6 +1410,27 @@ export default function App(): JSX.Element {
             {ctxTargets.every((e) => lib.favorites.has(libKey(e))) ? '☆ 取消收藏' : '★ 收藏'}
             {ctxTargets.length > 1 ? `（${ctxTargets.length} 个）` : ''}
           </button>
+          <div className="ctx-row">
+            <span>评分</span>
+            <RatingStars
+              value={ctxTargets.length === 1 ? (lib.ratings[libKey(ctxTargets[0])] ?? 0) : 0}
+              onChange={(v) => {
+                void rate(ctxTargets, v)
+                setCtx(null)
+              }}
+              size={15}
+            />
+          </div>
+          <div className="ctx-row">
+            <span>颜色</span>
+            <ColorDots
+              value={ctxTargets.length === 1 ? (lib.colors[libKey(ctxTargets[0])] ?? null) : null}
+              onChange={(c) => {
+                void setColor(ctxTargets, c)
+                setCtx(null)
+              }}
+            />
+          </div>
           <button
             onClick={() => {
               setTagTarget(ctxTargets)
@@ -1088,6 +1438,33 @@ export default function App(): JSX.Element {
             }}
           >
             编辑标签…
+          </button>
+          <hr />
+          {ctxTargets.length === 1 && (
+            <button
+              onClick={() => {
+                setRenameTarget(ctx.entry)
+                setCtx(null)
+              }}
+            >
+              重命名… <kbd>F2</kbd>
+            </button>
+          )}
+          <button
+            onClick={() => {
+              void moveEntries(ctxTargets)
+              setCtx(null)
+            }}
+          >
+            移动到文件夹…{ctxTargets.length > 1 ? `（${ctxTargets.length} 个）` : ''}
+          </button>
+          <button
+            onClick={() => {
+              trashEntries(ctxTargets)
+              setCtx(null)
+            }}
+          >
+            删除到回收站{ctxTargets.length > 1 ? `（${ctxTargets.length} 个）` : ''} <kbd>Del</kbd>
           </button>
           <hr />
           <button
@@ -1101,23 +1478,10 @@ export default function App(): JSX.Element {
           >
             用 Blender 打开
           </button>
-          <button onClick={() => void window.api.openPath(ctx.entry.path)}>
-            用默认程序打开
-          </button>
-          <hr />
-          <button onClick={() => void window.api.showItem(ctx.entry.path)}>
-            在资源管理器中显示
-          </button>
+          <button onClick={() => void window.api.openPath(ctx.entry.path)}>用默认程序打开</button>
+          <button onClick={() => void window.api.showItem(ctx.entry.path)}>在资源管理器中显示</button>
           <button onClick={() => copyPaths(ctxTargets)}>
             复制完整路径{ctxTargets.length > 1 ? `（${ctxTargets.length} 个）` : ''}
-          </button>
-          <button
-            onClick={() => {
-              void navigator.clipboard.writeText(ctx.entry.name)
-              setToast('已复制文件名')
-            }}
-          >
-            复制文件名
           </button>
           <hr />
           {ctx.entry.previewable && (
@@ -1163,6 +1527,14 @@ export default function App(): JSX.Element {
               导出 {ctxTargets.length} 个到文件夹…
             </button>
           )}
+          <button
+            onClick={() => {
+              void exportCsv(ctxTargets)
+              setCtx(null)
+            }}
+          >
+            导出清单 (CSV)…
+          </button>
         </ContextMenu>
       )}
 
@@ -1174,7 +1546,15 @@ export default function App(): JSX.Element {
           onClose={closeViewer}
           lighting={settings?.lighting ?? 'studio'}
           favorites={lib.favorites}
+          ratings={lib.ratings}
           onToggleFavorite={toggleFavoriteOne}
+          onRate={rateOne}
+          compareEntry={compareEntry}
+          onCompare={setCompareEntry}
+          getThumbUrl={getThumbUrl}
+          onSetThumb={setCustomThumb}
+          thumbSize={settings?.thumbSize ?? 512}
+          thumbBackground={settings?.background ?? 'transparent'}
         />
       )}
 
@@ -1187,28 +1567,19 @@ export default function App(): JSX.Element {
             const next = await window.api.saveSettings(patch)
             setSettings(next)
             if (patch.blenderPath !== undefined) setBlender(await window.api.blenderInfo())
-            if (
-              patch.recursive !== undefined ||
-              patch.maxDepth !== undefined ||
-              patch.showUnsupported !== undefined
-            ) {
+            if (patch.recursive !== undefined || patch.maxDepth !== undefined || patch.showUnsupported !== undefined) {
               if (root) void openFolder(root)
             }
             if (
               patch.thumbSize !== undefined ||
               patch.lighting !== undefined ||
-              patch.background !== undefined
+              patch.background !== undefined ||
+              patch.thumbAngle !== undefined ||
+              patch.thumbShading !== undefined
             ) {
-              requested.current = new Set()
-              setThumbs(new Map())
-              // Grid 的可见范围没变不会重新上报，手动补一次
-              setTimeout(() => {
-                for (const v of lastVisible.current) requestOne(v.entry, v.priority)
-              }, 50)
+              resubmitVisible()
             }
-            if (patch.disableGpu !== undefined) {
-              setToast('GPU 设置改动需要重启程序才生效', 'warn')
-            }
+            if (patch.disableGpu !== undefined) setToast('GPU 设置改动需要重启程序才生效', 'warn')
           }}
           onBlenderRedetect={async (p) => {
             const info = await window.api.blenderRedetect(p)
@@ -1241,19 +1612,42 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {exportState && (
-        <ExportDialog
-          state={exportState}
-          onClose={() => setExportState(null)}
-          onOpenDir={(dir) => void window.api.openPath(dir)}
+      {renameTarget && (
+        <RenameDialog entry={renameTarget} onClose={() => setRenameTarget(null)} onRename={(n) => doRename(renameTarget, n)} />
+      )}
+
+      {confirm && <ConfirmDialog {...confirm} onClose={() => setConfirm(null)} />}
+
+      {showDupes && scan && (
+        <DupesDialog
+          entries={scan.entries}
+          getThumbUrl={getThumbUrl}
+          onClose={() => setShowDupes(false)}
+          onTrash={async (paths) => {
+            const r = await window.api.trashModels(paths)
+            const gone = new Set(paths.map((p) => p.toLowerCase()))
+            const ids = new Set((scan.entries ?? []).filter((e) => gone.has(e.path.toLowerCase())).map((e) => e.id))
+            removeEntries(ids)
+            void refreshLib()
+            return r
+          }}
+          onTag={async (paths, tag) => {
+            await window.api.addTag(paths, tag)
+            await refreshLib()
+          }}
+          onReveal={(p) => void window.api.showItem(p)}
         />
+      )}
+
+      {exportState && (
+        <ExportDialog state={exportState} onClose={() => setExportState(null)} onOpenDir={(dir) => void window.api.openPath(dir)} />
       )}
 
       {failInfo && (
         <div className="modal-mask" onClick={() => setFailInfo(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>缩略图生成失败</h3>
-            <p style={{ wordBreak: 'break-all' }}>{failInfo.entry.rel}</p>
+            <p className="wrap">{failInfo.entry.rel}</p>
             <pre className="errbox">{failInfo.error}</pre>
             {failInfo.missing.length > 0 && (
               <>

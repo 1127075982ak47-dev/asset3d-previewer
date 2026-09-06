@@ -3,16 +3,21 @@ import type {
   AppInfo,
   AppSettings,
   BlenderInfo,
+  DupeProgress,
+  DupeResult,
   ExportBatchResult,
   HdriEntry,
   LibraryPayload,
   MenuAction,
   ModelEntry,
+  MoveResult,
+  RenameResult,
   ScanOptions,
   ScanProgress,
   ScanResult,
   ThumbRequest,
-  ThumbResult
+  ThumbResult,
+  TrashResult
 } from '../shared/types'
 
 function on<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -87,6 +92,37 @@ const api = {
     ipcRenderer.invoke('library:removeTag', paths, tag),
   setTags: (p: string, tags: string[]): Promise<LibraryPayload> =>
     ipcRenderer.invoke('library:setTags', p, tags),
+  setRating: (paths: string[], rating: number): Promise<LibraryPayload> =>
+    ipcRenderer.invoke('library:setRating', paths, rating),
+  setColor: (paths: string[], color: string | null): Promise<LibraryPayload> =>
+    ipcRenderer.invoke('library:setColor', paths, color),
+
+  /* ---- 文件操作 ---- */
+  renameModel: (entry: ModelEntry, newName: string, root: string, req: ThumbRequest): Promise<RenameResult> =>
+    ipcRenderer.invoke('fs:rename', entry, newName, root, req),
+  moveModels: (entries: ModelEntry[], destDir: string): Promise<MoveResult> =>
+    ipcRenderer.invoke('fs:move', entries, destDir),
+  trashModels: (paths: string[]): Promise<TrashResult> => ipcRenderer.invoke('fs:trash', paths),
+
+  /* ---- 重复文件 ---- */
+  findDuplicates: (files: { path: string; size: number }[]): Promise<DupeResult> =>
+    ipcRenderer.invoke('dupes:find', files),
+  cancelDuplicates: (): Promise<boolean> => ipcRenderer.invoke('dupes:cancel'),
+  onDupeProgress: (cb: (p: DupeProgress) => void): (() => void) => on('dupes:progress', cb),
+
+  /** 查看器当前视角写成这个模型的缩略图 */
+  setCustomThumb: (entry: ModelEntry, req: ThumbRequest, dataUrl: string): Promise<ThumbResult> =>
+    ipcRenderer.invoke('thumb:setCustom', entry, req, dataUrl),
+  /** 保存任意文本文件（CSV 清单等），弹保存框 */
+  exportText: (name: string, content: string, filterName: string, ext: string): Promise<string | null> =>
+    ipcRenderer.invoke('export:text', name, content, filterName, ext),
+  /** 把一串 PNG dataURL 写进选定目录（转盘序列） */
+  exportFrames: (
+    dirTitle: string,
+    baseName: string,
+    frames: string[]
+  ): Promise<{ ok: boolean; dir?: string; error?: string }> =>
+    ipcRenderer.invoke('export:frames', dirTitle, baseName, frames),
 
   /* ---- 导出 ---- */
   exportBatchTo: (
@@ -143,6 +179,8 @@ export interface WorkerJob {
   px: number
   lighting: AppSettings['lighting']
   background: AppSettings['background']
+  angle?: AppSettings['thumbAngle']
+  shading?: AppSettings['thumbShading']
   diag?: boolean
 }
 

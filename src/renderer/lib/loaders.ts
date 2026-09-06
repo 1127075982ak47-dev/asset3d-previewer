@@ -25,12 +25,68 @@ import { MD2Loader } from 'three/examples/jsm/loaders/MD2Loader.js'
 import { MMDLoader } from 'three/examples/jsm/loaders/MMDLoader.js'
 import { Rhino3dmLoader } from 'three/examples/jsm/loaders/3DMLoader.js'
 import { GCodeLoader } from 'three/examples/jsm/loaders/GCodeLoader.js'
+import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { isBinaryFbx, normalizeFbxAsciiIndent } from './fbxText'
 
 export interface LoadedModel {
   object: THREE.Object3D
   animations: THREE.AnimationClip[]
+  /** glTF KHR_materials_variants 的变体名 */
+  variants?: string[]
+  /** 切换变体；传 null 还原默认材质 */
+  selectVariant?: (name: string | null) => Promise<void>
+}
+
+interface GltfParserLike {
+  getDependency: (type: string, index: number) => Promise<THREE.Material>
+  assignFinalMaterial: (mesh: THREE.Mesh) => void
+}
+
+interface VariantMapping {
+  material: number
+  variants: number[]
+}
+
+/**
+ * KHR_materials_variants：GLTFLoader 不内置切换逻辑，按官方示例手动做。
+ * 每个 mesh 的 userData.gltfExtensions.KHR_materials_variants.mappings 里
+ * 写着「哪些变体用哪个材质」。
+ */
+function setupVariants(
+  scene: THREE.Object3D,
+  parser: GltfParserLike,
+  gltfExtensions: Record<string, unknown> | undefined
+): Pick<LoadedModel, 'variants' | 'selectVariant'> {
+  const ext = gltfExtensions?.['KHR_materials_variants'] as { variants?: { name: string }[] } | undefined
+  const names = ext?.variants?.map((v) => v.name) ?? []
+  if (names.length === 0) return {}
+  const selectVariant = async (name: string | null): Promise<void> => {
+    const idx = name === null ? -1 : names.indexOf(name)
+    const jobs: Promise<void>[] = []
+    scene.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!mesh.isMesh) return
+      const def = (mesh.userData['gltfExtensions'] as Record<string, { mappings?: VariantMapping[] }> | undefined)?.[
+        'KHR_materials_variants'
+      ]
+      if (!def?.mappings) return
+      if (!mesh.userData['originalMaterial']) mesh.userData['originalMaterial'] = mesh.material
+      const mapping = idx >= 0 ? def.mappings.find((m) => m.variants.includes(idx)) : undefined
+      if (mapping) {
+        jobs.push(
+          parser.getDependency('material', mapping.material).then((m) => {
+            mesh.material = m
+            parser.assignFinalMaterial(mesh)
+          })
+        )
+      } else {
+        mesh.material = mesh.userData['originalMaterial'] as THREE.Material
+      }
+    })
+    await Promise.all(jobs)
+  }
+  return { variants: names, selectVariant }
 }
 
 let dracoLoader: DRACOLoader | null = null
@@ -269,7 +325,12 @@ async function loadRaw(
       // 相对的 Barrel.bin / textures/ColorAtlas.png 由 three.js 自己
       // 按 url base 拼接，走 asset3d:// 协议读盘
       const gltf = await loader.loadAsync(url)
-      return { object: gltf.scene, animations: gltf.animations ?? [] }
+      const v = setupVariants(
+        gltf.scene,
+        gltf.parser as unknown as GltfParserLike,
+        (gltf.userData as { gltfExtensions?: Record<string, unknown> } | undefined)?.gltfExtensions
+      )
+      return { object: gltf.scene, animations: gltf.animations ?? [], ...v }
     }
 
     case '.fbx': {
@@ -420,9 +481,52 @@ async function loadRaw(
       return { object: obj, animations: [] }
     }
 
+    case '.bvh': {
+      // 动捕骨骼：没有网格。WebGL 画不出粗线，SkeletonHelper 的 1px 线在缩略图里几乎看不见，
+      // 所以给每根骨骼套一个细圆柱、每个关节一个小球，挂在父骨骼上跟着动画走。
+      const r = await new BVHLoader(manager).loadAsync(url)
+      const rootBone = r.skeleton.bones[0]
+      const group = new THREE.Group()
+      group.add(rootBone)
+      group.updateMatrixWorld(true)
+      return { object: buildBoneMeshes(group, r.skeleton.bones), animations: r.clip ? [r.clip] : [] }
+    }
+
     default:
       throw new Error(`不支持的格式: ${ext}`)
   }
+}
+
+/** 给骨骼套上可见的圆柱与关节球（BVH 只有骨骼没有网格） */
+function buildBoneMeshes(group: THREE.Group, bones: THREE.Bone[]): THREE.Group {
+  // 骨架整体尺寸决定圆柱粗细
+  const box = new THREE.Box3()
+  const p = new THREE.Vector3()
+  for (const b of bones) box.expandByPoint(b.getWorldPosition(p))
+  const diag = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length() || 1
+  const radius = Math.max(diag * 0.012, 1e-4)
+  const boneMat = new THREE.MeshStandardMaterial({ color: 0x5fb8d8, roughness: 0.5, metalness: 0.05 })
+  const jointMat = new THREE.MeshStandardMaterial({ color: 0xff8fb8, roughness: 0.5, metalness: 0.05 })
+  const cyl = new THREE.CylinderGeometry(radius * 0.7, radius, 1, 10, 1)
+  cyl.translate(0, 0.5, 0) // 让圆柱从原点沿 +Y 伸出去，方便按长度缩放
+  const sphere = new THREE.SphereGeometry(radius * 1.4, 12, 10)
+  const up = new THREE.Vector3(0, 1, 0)
+  for (const b of bones) {
+    const joint = new THREE.Mesh(sphere, jointMat)
+    joint.name = `${b.name || 'joint'}_关节`
+    b.add(joint)
+    const parent = b.parent as THREE.Bone | null
+    if (!parent || !(parent as THREE.Bone).isBone) continue
+    const len = b.position.length()
+    if (len < 1e-6) continue
+    const m = new THREE.Mesh(cyl, boneMat)
+    m.name = `${parent.name || 'bone'}→${b.name || ''}`
+    m.quaternion.setFromUnitVectors(up, b.position.clone().normalize())
+    m.scale.set(1, len, 1)
+    parent.add(m)
+  }
+  group.updateMatrixWorld(true)
+  return group
 }
 
 /**

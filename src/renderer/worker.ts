@@ -10,6 +10,7 @@ import {
   relaxBackfaceCulling,
   type LightingPreset
 } from './lib/framing'
+import { ShadingController } from './lib/shading'
 import type { WorkerApi, WorkerJob } from '../preload'
 import type { Api } from '../preload'
 
@@ -58,6 +59,16 @@ let lights: THREE.Light[] = addLights(scene, 'studio')
 let currentLighting: LightingPreset = 'studio'
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000)
+const shading = new ShadingController()
+
+/** 缩略图相机角度预设 → 方位角 / 仰角（度） */
+const ANGLE_PRESETS: Record<string, { azimuth: number; elevation: number }> = {
+  iso: { azimuth: 35, elevation: 22 },
+  'iso-left': { azimuth: -35, elevation: 22 },
+  front: { azimuth: 0, elevation: 8 },
+  side: { azimuth: 90, elevation: 8 },
+  top: { azimuth: 0.01, elevation: 89 }
+}
 
 const BG_COLORS: Record<string, number | null> = {
   transparent: null,
@@ -175,8 +186,16 @@ window.workerApi.onRender(async (job: WorkerJob) => {
     normalizeMaterials(loaded.object)
     relaxBackfaceCulling(loaded.object)
     scene.add(loaded.object)
+    if (job.shading && job.shading !== 'material') {
+      shading.attach(loaded.object)
+      shading.apply(job.shading, false)
+    }
 
-    frameObject(loaded.object, camera)
+    const preset = ANGLE_PRESETS[job.angle ?? 'iso'] ?? ANGLE_PRESETS.iso
+    frameObject(loaded.object, camera, {
+      azimuth: THREE.MathUtils.degToRad(preset.azimuth),
+      elevation: THREE.MathUtils.degToRad(preset.elevation)
+    })
 
     // 显式渲染一帧。隐藏窗口里 requestAnimationFrame 会被节流甚至不触发，
     // 所以整条链路都不能依赖 rAF。
@@ -202,6 +221,7 @@ window.workerApi.onRender(async (job: WorkerJob) => {
       error: e instanceof Error ? e.message : String(e)
     })
   } finally {
+    shading.detach()
     if (loaded) {
       scene.remove(loaded.object)
       disposeObject(loaded.object)

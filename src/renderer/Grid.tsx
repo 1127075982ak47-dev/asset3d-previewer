@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { RatingStars } from './RatingStars'
+import { colorOf } from '../shared/labels'
+import { libKey } from '../shared/filters'
 import type { ModelEntry, ThumbResult } from '../shared/types'
 
-const GAP = 12
-const META_H = 40
+const GAP = 16
+const META_H = 52
 
-interface Props {
+export interface ItemViewProps {
   entries: ModelEntry[]
   thumbs: Map<string, ThumbResult>
   favorites: Set<string>
   tags: Record<string, string[]>
-  cardSize: number
+  ratings: Record<string, number>
+  colors: Record<string, string>
   selectedIds: Set<string>
   onSelect: (index: number, mode: 'single' | 'toggle' | 'range') => void
   onOpen: (index: number) => void
   onContext: (e: React.MouseEvent, entry: ModelEntry, index: number) => void
   onDragStart: (index: number) => void
   onToggleFavorite: (entry: ModelEntry) => void
+  onRate: (entry: ModelEntry, v: number) => void
   onThumbError: (entry: ModelEntry) => void
   /** 当前键盘焦点所在的卡片下标 */
   focusedIndex: number
@@ -24,6 +29,10 @@ interface Props {
   keyboardEnabled: boolean
   /** 可视范围变化时回调，主进程据此调整出图优先级 */
   onVisibleRange: (entries: { entry: ModelEntry; priority: number }[]) => void
+}
+
+interface Props extends ItemViewProps {
+  cardSize: number
 }
 
 export function fmtSize(bytes: number): string {
@@ -39,8 +48,66 @@ export function fmtTris(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
-function libKey(e: ModelEntry): string {
-  return e.path.toLowerCase()
+/** 键盘在卡片间移动：Grid 和 ListView 共用，只是列数不同 */
+export function useItemKeyboard(
+  enabled: boolean,
+  count: number,
+  cols: number,
+  perPage: number,
+  focusedIndex: number,
+  onFocusIndex: (i: number) => void,
+  scrollIntoView: (i: number) => void
+): void {
+  useEffect(() => {
+    if (!enabled || count === 0) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLSelectElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return
+      }
+      const cur = focusedIndex < 0 ? 0 : focusedIndex
+      let next: number | null = null
+      switch (e.key) {
+        case 'ArrowRight':
+          next = cur + 1
+          break
+        case 'ArrowLeft':
+          next = cur - 1
+          break
+        case 'ArrowDown':
+          next = cur + cols
+          break
+        case 'ArrowUp':
+          next = cur - cols
+          break
+        case 'Home':
+          next = 0
+          break
+        case 'End':
+          next = count - 1
+          break
+        case 'PageDown':
+          next = cur + perPage
+          break
+        case 'PageUp':
+          next = cur - perPage
+          break
+        default:
+          return
+      }
+      e.preventDefault()
+      // 首次按方向键时先落到第 0 张，而不是直接跳走
+      if (focusedIndex < 0) next = 0
+      const clamped = Math.max(0, Math.min(count - 1, next))
+      onFocusIndex(clamped)
+      scrollIntoView(clamped)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [enabled, count, cols, perPage, focusedIndex, onFocusIndex, scrollIntoView])
 }
 
 /**
@@ -54,6 +121,8 @@ export default function Grid({
   thumbs,
   favorites,
   tags,
+  ratings,
+  colors,
   cardSize,
   selectedIds,
   onSelect,
@@ -61,6 +130,7 @@ export default function Grid({
   onContext,
   onDragStart,
   onToggleFavorite,
+  onRate,
   onThumbError,
   focusedIndex,
   onFocusIndex,
@@ -74,7 +144,7 @@ export default function Grid({
   const cardW = cardSize
   const cardH = cardSize + META_H
   const rowH = cardH + GAP
-  const innerW = Math.max(viewport.w - 24, cardW)
+  const innerW = Math.max(viewport.w - 40, cardW)
   const cols = Math.max(1, Math.floor((innerW + GAP) / (cardW + GAP)))
   const rows = Math.ceil(entries.length / cols)
   const totalH = rows * rowH
@@ -106,10 +176,7 @@ export default function Grid({
 
   const bufferRows = 2
   const firstRow = Math.max(0, Math.floor(scrollTop / rowH) - bufferRows)
-  const lastRow = Math.min(
-    rows - 1,
-    Math.ceil((scrollTop + viewport.h) / rowH) + bufferRows
-  )
+  const lastRow = Math.min(rows - 1, Math.ceil((scrollTop + viewport.h) / rowH) + bufferRows)
   const start = firstRow * cols
   const end = Math.min(entries.length, (lastRow + 1) * cols)
 
@@ -144,70 +211,15 @@ export default function Grid({
     [cols, rowH, cardH]
   )
 
-  // 方向键在卡片之间移动。Grid 自己处理是因为只有它知道当前一行几列。
-  useEffect(() => {
-    if (!keyboardEnabled || entries.length === 0) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLSelectElement ||
-        e.target instanceof HTMLTextAreaElement
-      ) {
-        return
-      }
-
-      const perPage = Math.max(1, Math.floor(viewport.h / rowH)) * cols
-      const cur = focusedIndex < 0 ? 0 : focusedIndex
-      let next: number | null = null
-
-      switch (e.key) {
-        case 'ArrowRight':
-          next = cur + 1
-          break
-        case 'ArrowLeft':
-          next = cur - 1
-          break
-        case 'ArrowDown':
-          next = cur + cols
-          break
-        case 'ArrowUp':
-          next = cur - cols
-          break
-        case 'Home':
-          next = 0
-          break
-        case 'End':
-          next = entries.length - 1
-          break
-        case 'PageDown':
-          next = cur + perPage
-          break
-        case 'PageUp':
-          next = cur - perPage
-          break
-        default:
-          return
-      }
-
-      e.preventDefault()
-      // 首次按方向键时先落到第 0 张，而不是直接跳走
-      if (focusedIndex < 0) next = 0
-      const clamped = Math.max(0, Math.min(entries.length - 1, next))
-      onFocusIndex(clamped)
-      scrollIntoView(clamped)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [
+  useItemKeyboard(
     keyboardEnabled,
     entries.length,
     cols,
-    rowH,
-    viewport.h,
+    Math.max(1, Math.floor(viewport.h / rowH)) * cols,
     focusedIndex,
     onFocusIndex,
     scrollIntoView
-  ])
+  )
 
   const cards: JSX.Element[] = []
   for (let i = start; i < end; i++) {
@@ -216,25 +228,26 @@ export default function Grid({
     const row = Math.floor(i / cols)
     const col = i % cols
     const t = thumbs.get(e.id)
-    const fav = favorites.has(libKey(e))
-    const tagList = tags[libKey(e)] ?? []
+    const key = libKey(e)
+    const fav = favorites.has(key)
+    const tagList = tags[key] ?? []
+    const rating = ratings[key] ?? 0
+    const color = colorOf(colors[key])
     const animated = !!t?.stats && t.stats.animations.length > 0
 
     cards.push(
       <div
         key={e.id}
-        className={`card${selectedIds.has(e.id) ? ' sel' : ''}${
-          focusedIndex === i ? ' focus' : ''
-        }${e.previewable ? '' : ' unsupported'}`}
+        className={`card${selectedIds.has(e.id) ? ' sel' : ''}${focusedIndex === i ? ' focus' : ''}${
+          e.previewable ? '' : ' unsupported'
+        }`}
         style={{
           width: cardW,
           height: cardH,
           transform: `translate(${col * (cardW + GAP)}px, ${row * rowH}px)`
         }}
         draggable
-        onClick={(ev) =>
-          onSelect(i, ev.ctrlKey || ev.metaKey ? 'toggle' : ev.shiftKey ? 'range' : 'single')
-        }
+        onClick={(ev) => onSelect(i, ev.ctrlKey || ev.metaKey ? 'toggle' : ev.shiftKey ? 'range' : 'single')}
         onDoubleClick={() => onOpen(i)}
         onContextMenu={(ev) => onContext(ev, e, i)}
         onDragStart={(ev) => {
@@ -249,13 +262,7 @@ export default function Grid({
       >
         <div className="thumb">
           {t?.url ? (
-            <img
-              src={t.url}
-              alt={e.name}
-              draggable={false}
-              loading="lazy"
-              onError={() => onThumbError(e)}
-            />
+            <img src={t.url} alt={e.name} draggable={false} loading="lazy" onError={() => onThumbError(e)} />
           ) : !e.previewable ? (
             <span className="placeholder-ext">{e.ext.slice(1).toUpperCase()}</span>
           ) : t?.state === 'failed' ? (
@@ -266,9 +273,7 @@ export default function Grid({
             <span className="placeholder-ico">◻</span>
           )}
 
-          <span className={`badge${e.ext === '.blend' ? ' blend' : ''}`}>
-            {e.ext.slice(1)}
-          </span>
+          <span className={`badge${e.ext === '.blend' ? ' blend' : ''}`}>{e.ext.slice(1)}</span>
 
           <span
             className={`star${fav ? ' on' : ''}`}
@@ -312,19 +317,25 @@ export default function Grid({
         </div>
 
         <div className="meta">
-          <div className="name">{e.name}</div>
+          <div className="name">
+            {color && <i className="color-mark" style={{ background: color }} />}
+            <span>{e.name}</span>
+          </div>
           <div className="sub">
-            <span>
+            <span className="info">
               {fmtSize(e.size)}
               {t?.stats ? ` · △${fmtTris(t.stats.triangles)}` : ''}
             </span>
-            {tagList.length > 0 && (
-              <span className="tags">
-                {tagList.slice(0, 2).join(' · ')}
-                {tagList.length > 2 ? ` +${tagList.length - 2}` : ''}
-              </span>
-            )}
+            <RatingStars value={rating} onChange={(v) => onRate(e, v)} size={11} compact />
           </div>
+          {tagList.length > 0 && (
+            <div className="tags">
+              {tagList.slice(0, 3).map((tg) => (
+                <span key={tg}>{tg}</span>
+              ))}
+              {tagList.length > 3 && <span className="more">+{tagList.length - 3}</span>}
+            </div>
+          )}
         </div>
       </div>
     )

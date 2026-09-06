@@ -127,6 +127,118 @@ app.whenReady().then(async () => {
   await sleep(600)
   await step('autorotate-off', toggle('自动旋转', false))
 
+  /* ---- 1.2 新增：贴图通道 ---- */
+  await step('display-tab', clickTab('显示'))
+  for (const m of ['基础色', '粗糙度', '金属度', '法线贴图', 'AO 贴图', '自发光', '顶点色']) {
+    await step(`channel-${m}`, clickButtonWithText('.mode-grid', m))
+  }
+  await step('channel-back', clickButtonWithText('.mode-grid', '材质'))
+  await step('viewhelper-off', toggle('导航球', false))
+  await step('viewhelper-on', toggle('导航球', true))
+
+  /* ---- 环境：曝光 / 色调映射 / 光方向 ---- */
+  const setSlider = (label, v) =>
+    `(() => { const r = [...document.querySelectorAll('.prow.slider')].find(x => x.textContent.includes('${label}')); if (!r) throw new Error('没有滑块 ${label}'); const i = r.querySelector('input'); const s = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; s.call(i, ${v}); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`
+  const setSelect = (rowText, value) =>
+    `(() => { const r = [...document.querySelectorAll('.prow')].find(x => x.textContent.includes('${rowText}')); const sel = r && r.querySelector('select'); if (!sel) throw new Error('没有下拉 ${rowText}'); const s = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; s.call(sel, '${value}'); sel.dispatchEvent(new Event('change', { bubbles: true })); return true })()`
+  await step('env-tab2', clickTab('环境'))
+  await step('exposure-2', setSlider('曝光', 2))
+  await step('exposure-1', setSlider('曝光', 1))
+  await step('tonemap-agx', setSelect('色调映射', 'agx'))
+  await step('tonemap-neutral', setSelect('色调映射', 'neutral'))
+  await step('tonemap-aces', setSelect('色调映射', 'aces'))
+  await step('light-rot', setSlider('光方向', 120))
+  await step('light-int', setSlider('光强度', 1.6))
+  await step('light-reset', setSlider('光方向', 0))
+  await step('light-int-reset', setSlider('光强度', 1))
+
+  /* ---- 工具：剖切 / 测量 / 法线 / HUD ---- */
+  await step('tools-tab', clickTab('工具'))
+  await step('clip-on', toggle('启用剖切平面', true))
+  await step('clip-z', clickButtonWithText('.prow.seg', 'Z 轴'))
+  await step('clip-pos', setSlider('位置', 0.3))
+  await step('clip-flip', toggle('翻转保留侧', true))
+  await step('clip-flip-off', toggle('翻转保留侧', false))
+  await step('clip-off', toggle('启用剖切平面', false))
+
+  const rect = await js(`(() => { const r = document.querySelector('.viewer .stage canvas').getBoundingClientRect(); return [r.left, r.top, r.width, r.height] })()`)
+  const cx = Math.round(rect[0] + rect[2] / 2)
+  const cy = Math.round(rect[1] + rect[3] / 2)
+  const realClick = async (x, y) => {
+    win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+    await sleep(40)
+    win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+    await sleep(200)
+  }
+  await step('measure-on', toggle('两点测距', true))
+  // 模型形状未知，围绕画布中心多试几个落点，直到两个点都落在表面上
+  let measured = { label: null, hud: '' }
+  const offsets = [[0, 0], [20, -20], [-25, 15], [40, 0], [0, 35], [-40, -30], [60, 25]]
+  for (const [dx, dy] of offsets) {
+    await realClick(cx + dx, cy + dy)
+    await sleep(250)
+    measured = await js(`(() => { const l = document.querySelector('.measure-label'); const hud = document.querySelector('.measure-hud')?.textContent || ''; return { label: l && !l.hidden ? l.textContent : null, hud } })()`)
+    if (/距离/.test(measured.hud)) break
+  }
+  console.log('测量:', JSON.stringify(measured))
+  results.push({ name: 'measure-distance', ok: /距离/.test(measured.hud), err: /距离/.test(measured.hud) ? [] : ['两点测量没有得到距离'] })
+  await step('measure-shot', 'true')
+  await step('measure-off', toggle('两点测距', false))
+  await step('normals-on', toggle('顶点法线', true))
+  await step('normals-off', toggle('顶点法线', false))
+  await step('hud-on', toggle('性能 HUD', true))
+  await sleep(900)
+  const hud = await js(`document.querySelector('.stats-hud')?.textContent || null`)
+  console.log('性能 HUD:', hud)
+  await step('hud-off', toggle('性能 HUD', false))
+  const skelDisabled = await js(`(() => { const l = [...document.querySelectorAll('.prow.toggle')].find(x => x.textContent.includes('骨骼')); return l ? l.querySelector('input').disabled : null })()`)
+  if (skelDisabled === false) {
+    await step('skeleton-on', toggle('骨骼', true))
+    await step('skeleton-off', toggle('骨骼', false))
+  }
+
+  /* ---- 导航球：点右下角的轴 ---- */
+  const beforeHelper = (await win.webContents.capturePage()).toPNG()
+  // X 轴的球大致在导航球中心偏右；点导航球中心右侧 35px
+  await realClick(Math.round(rect[0] + rect[2] - 64 + 36), Math.round(rect[1] + rect[3] - 64))
+  await sleep(1200)
+  const afterHelper = (await win.webContents.capturePage()).toPNG()
+  {
+    const { PNG } = require(path.join(__dirname, '..', 'node_modules', 'pngjs'))
+    const a = PNG.sync.read(beforeHelper)
+    const b = PNG.sync.read(afterHelper)
+    let diff = 0
+    for (let i = 0; i < a.data.length; i += 4) if (Math.abs(a.data[i] - b.data[i]) > 8) diff++
+    const ratio = diff / (a.width * a.height)
+    console.log(`导航球点击后画面变化: ${(ratio * 100).toFixed(1)}%`)
+    results.push({ name: 'viewhelper-click', ok: ratio > 0.005, err: ratio > 0.005 ? [] : ['点击导航球后画面没变'] })
+  }
+  await step('viewhelper-shot', 'true')
+
+  /* ---- 设为缩略图 ---- */
+  await step('set-thumb', clickButtonWithText('.viewer .vtop', '设为缩略图'))
+  await sleep(1500)
+  const thumbWarn = await js(`document.querySelector('.vwarn')?.textContent || ''`)
+  console.log('设为缩略图提示:', thumbWarn)
+  results.push({ name: 'set-thumb-feedback', ok: /缩略图/.test(thumbWarn), err: [] })
+
+  /* ---- 对比模式 ---- */
+  await step('compare-open', clickButtonWithText('.viewer .vtop', '对比'))
+  await sleep(400)
+  await step('compare-pick', `(() => { const it = document.querySelector('.picker-item'); if (!it) throw new Error('没有可选模型'); it.click(); return true })()`)
+  let compared = false
+  for (let i = 0; i < 40; i++) {
+    await sleep(500)
+    if (await js(`document.querySelectorAll('.stages.compare .stage canvas').length === 2 && !document.querySelector('.stages .loading')`)) {
+      compared = true
+      break
+    }
+  }
+  results.push({ name: 'compare-two-canvases', ok: compared, err: compared ? [] : ['对比模式没有出现两个画布'] })
+  await sleep(800)
+  await step('compare-shot', 'true')
+  await step('compare-close', clickButtonWithText('.viewer .vtop', '关闭对比'))
+
   await step('tree-tab', clickTab('结构'))
   const nodes = await js(`document.querySelectorAll('.nrow').length`)
   const mats = await js(`document.querySelectorAll('.mrow').length`)
@@ -158,6 +270,11 @@ app.whenReady().then(async () => {
     }
   }
   console.log('关闭查看器后出图恢复:', resumed)
+
+  // 设为缩略图之后，网格上这张卡的 <img> 应带缓存破坏参数
+  const customThumb = await js(`!![...document.querySelectorAll('.card .thumb img')].find(i => /\\?v=\\d+/.test(i.src))`)
+  console.log('自定义缩略图已刷新到网格:', customThumb)
+  results.push({ name: 'custom-thumb-in-grid', ok: customThumb, err: [] })
 
   const failed = results.filter((r) => !r.ok)
   console.log('='.repeat(64))

@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { sha1 } from './util'
-import type { LightingPreset, ThumbBackground } from '../shared/types'
+import type { LightingPreset, ThumbAngle, ThumbBackground, ThumbShading } from '../shared/types'
 
 export { sha1 }
 
@@ -104,14 +104,41 @@ function identity(f: FileIdentity): string {
   return `${path.basename(f.path).toLowerCase()}|${Math.round(f.mtimeMs)}|${f.size}`
 }
 
-/** 缓存键含 mtime+size，源文件一改就自动失效 */
+/**
+ * 缓存键含 mtime+size，源文件一改就自动失效。
+ * 相机角度 / 着色预设只在非默认值时才进键：默认配方的键和 1.1 完全一致，
+ * 升级后老缓存照样命中，不用重新出几千张图。
+ */
 export function thumbKey(
   f: FileIdentity,
   px: number,
   lighting: LightingPreset,
-  background: ThumbBackground
+  background: ThumbBackground,
+  angle: ThumbAngle = 'iso',
+  shading: ThumbShading = 'material'
 ): string {
-  return sha1(`${identity(f)}|${px}|${lighting}|${background}|v${RENDER_VERSION}`)
+  const extra = angle === 'iso' && shading === 'material' ? '' : `|${angle}|${shading}`
+  return sha1(`${identity(f)}|${px}|${lighting}|${background}|v${RENDER_VERSION}${extra}`)
+}
+
+/** 文件改名后把缩略图与统计从旧键搬到新键，改个名不该重新出图 */
+export async function copyThumb(fromKey: string, toKey: string): Promise<boolean> {
+  if (fromKey === toKey) return true
+  try {
+    const src = thumbPathFor(fromKey)
+    await fsp.access(src)
+    const dest = thumbPathFor(toKey)
+    await fsp.mkdir(path.dirname(dest), { recursive: true })
+    await fsp.copyFile(src, dest)
+    try {
+      await fsp.copyFile(metaPathFor(fromKey), metaPathFor(toKey))
+    } catch {
+      /* 没有统计就算了 */
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** .blend 内嵌预览图用另一个键，和真渲染图分开 */

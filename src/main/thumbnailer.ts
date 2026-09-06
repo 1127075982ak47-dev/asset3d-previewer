@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, type IpcMainEvent } from 'electron'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
 import {
+  copyThumb,
   deleteThumb,
   embeddedThumbKey,
   glbCachePath,
@@ -308,7 +309,9 @@ function pump(): void {
       ext: job.payload.ext,
       px: job.payload.req.px,
       lighting: job.payload.req.lighting,
-      background: job.payload.req.background
+      background: job.payload.req.background,
+      angle: job.payload.req.angle ?? 'iso',
+      shading: job.payload.req.shading ?? 'material'
     })
   }
 }
@@ -355,6 +358,43 @@ function enqueue(
   })
 }
 
+function keyOf(entry: ModelEntry, req: ThumbRequest): string {
+  return thumbKey(entry, req.px, req.lighting, req.background, req.angle ?? 'iso', req.shading ?? 'material')
+}
+
+/**
+ * 「用当前视角设为缩略图」：把查看器截出来的 PNG 直接写进这个文件的缓存键。
+ * 统计信息保留（模型没变），只换图。
+ */
+export async function setCustomThumb(entry: ModelEntry, req: ThumbRequest, png: Buffer): Promise<ThumbResult> {
+  const key = keyOf(entry, req)
+  for (const j of queue.remove(entry.id)) j.payload.resolve({ id: j.id, state: 'pending' })
+  await writeThumb(key, png)
+  const stats = await readMeta<ModelStats>(key)
+  const r: ThumbResult = {
+    id: entry.id,
+    state: 'ready',
+    // 加个时间戳让 <img> 不命中浏览器缓存，协议层会把 query 去掉
+    url: `${thumbUrl(key)}?v=${Date.now()}`,
+    stats: stats ?? undefined
+  }
+  onProgress?.(r)
+  return r
+}
+
+/** 文件改名 / 移动后把缩略图缓存搬到新键，并通知界面 */
+export async function migrateThumb(
+  oldEntry: ModelEntry,
+  newEntry: ModelEntry,
+  req: ThumbRequest
+): Promise<ThumbResult | null> {
+  const ok = await copyThumb(keyOf(oldEntry, req), keyOf(newEntry, req))
+  if (!ok) return null
+  const key = keyOf(newEntry, req)
+  const stats = await readMeta<ModelStats>(key)
+  return { id: newEntry.id, state: 'ready', url: thumbUrl(key), stats: stats ?? undefined }
+}
+
 /** 把一个模型丢进出图队列（或直接命中缓存） */
 export function requestThumb(
   entry: ModelEntry,
@@ -366,7 +406,7 @@ export function requestThumb(
     return Promise.resolve({ id: entry.id, state: 'unsupported' })
   }
 
-  const key = thumbKey(entry, req.px, req.lighting, req.background)
+  const key = keyOf(entry, req)
   const existing = pending.get(key)
   if (existing) return existing
 
@@ -402,7 +442,7 @@ export function requestThumb(
  */
 export async function invalidateThumb(entry: ModelEntry, req: ThumbRequest): Promise<void> {
   for (const j of queue.remove(entry.id)) j.payload.resolve({ id: j.id, state: 'pending' })
-  await deleteThumb(thumbKey(entry, req.px, req.lighting, req.background))
+  await deleteThumb(keyOf(entry, req))
   await deleteThumb(embeddedThumbKey(entry))
   if (entry.ext === '.blend') {
     await fsp.rm(glbCachePath(entry), { force: true }).catch(() => {})

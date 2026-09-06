@@ -27,7 +27,8 @@ export const MESH_EXTS = [
   '.pmx',
   '.pmd',
   '.3dm',
-  '.gcode'
+  '.gcode',
+  '.bvh'
 ] as const
 
 /** 需要 Blender 参与的格式 */

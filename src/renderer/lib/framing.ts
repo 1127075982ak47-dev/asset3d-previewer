@@ -56,6 +56,23 @@ export function addLights(scene: THREE.Scene, preset: LightingPreset): THREE.Lig
 export interface FrameResult {
   center: THREE.Vector3
   radius: number
+  box: THREE.Box3
+}
+
+/**
+ * 包围盒。Box3.setFromObject 只看几何体，纯骨骼（BVH 动捕）没有几何体会得到空盒，
+ * 这时退回用所有节点的世界坐标。
+ */
+export function boundsOf(object: THREE.Object3D): THREE.Box3 {
+  const box = new THREE.Box3().setFromObject(object)
+  if (!box.isEmpty()) return box
+  object.updateWorldMatrix(true, true)
+  const p = new THREE.Vector3()
+  object.traverse((o) => {
+    o.getWorldPosition(p)
+    box.expandByPoint(p)
+  })
+  return box
 }
 
 /**
@@ -73,11 +90,11 @@ export function frameObject(
   const elevation = opts.elevation ?? THREE.MathUtils.degToRad(22)
   const margin = opts.margin ?? 1.15
 
-  const box = new THREE.Box3().setFromObject(object)
-  if (box.isEmpty()) {
+  const box = boundsOf(object)
+  if (box.isEmpty() || box.getSize(new THREE.Vector3()).length() === 0) {
     camera.position.set(2, 2, 2)
     camera.lookAt(0, 0, 0)
-    return { center: new THREE.Vector3(), radius: 1 }
+    return { center: new THREE.Vector3(), radius: 1, box: new THREE.Box3() }
   }
 
   const center = box.getCenter(new THREE.Vector3())
@@ -105,7 +122,7 @@ export function frameObject(
   camera.updateProjectionMatrix()
   camera.lookAt(center)
 
-  return { center, radius }
+  return { center, radius, box }
 }
 
 /** 统计信息，详情面板用 */
@@ -146,7 +163,7 @@ export function computeStats(
     }
   })
 
-  const box = new THREE.Box3().setFromObject(object)
+  const box = boundsOf(object)
   const size = box.isEmpty()
     ? new THREE.Vector3()
     : box.getSize(new THREE.Vector3())

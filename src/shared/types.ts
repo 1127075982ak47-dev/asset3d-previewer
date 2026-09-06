@@ -86,6 +86,29 @@ export interface BlenderInfo {
 
 export type LightingPreset = 'studio' | 'outdoor' | 'neutral'
 export type ThumbBackground = 'transparent' | 'dark' | 'light' | 'white'
+/** 缩略图相机角度预设 */
+export type ThumbAngle = 'iso' | 'iso-left' | 'front' | 'top' | 'side'
+/** 缩略图着色预设 */
+export type ThumbShading = 'material' | 'clay' | 'matcap'
+
+export const THUMB_ANGLES: { key: ThumbAngle; label: string }[] = [
+  { key: 'iso', label: '3/4 视角（默认）' },
+  { key: 'iso-left', label: '3/4 视角（左）' },
+  { key: 'front', label: '正前方' },
+  { key: 'side', label: '正侧面' },
+  { key: 'top', label: '俯视' }
+]
+
+export const THUMB_SHADINGS: { key: ThumbShading; label: string }[] = [
+  { key: 'material', label: '材质（默认）' },
+  { key: 'clay', label: '白膜' },
+  { key: 'matcap', label: '雕塑（Matcap）' }
+]
+
+export type SortKey = 'name' | 'size' | 'date' | 'ext' | 'tris' | 'rating'
+export type SortDir = 'asc' | 'desc'
+export type ViewMode = 'grid' | 'list'
+export type Theme = 'light' | 'dark'
 
 export interface AppSettings {
   thumbSize: number
@@ -100,6 +123,10 @@ export interface AppSettings {
   background: ThumbBackground
   /** 缩略图与查看器默认光照 */
   lighting: LightingPreset
+  /** 缩略图相机角度 */
+  thumbAngle: ThumbAngle
+  /** 缩略图着色 */
+  thumbShading: ThumbShading
   /** 左侧文件夹树是否显示 */
   sidebarVisible: boolean
   /** 是否列出无法预览的 3D 格式 */
@@ -108,6 +135,18 @@ export interface AppSettings {
   cacheLimitMB: number
   /** 关闭 GPU 加速（显卡驱动有问题时的兜底），改动后需重启 */
   disableGpu: boolean
+  /** 启动时自动打开上次的文件夹 */
+  reopenLast: boolean
+  /** 上次打开的文件夹 */
+  lastFolder: string | null
+  /** 固定在侧栏「资源库」里的文件夹 */
+  pinnedFolders: string[]
+  /** 记住的界面状态 */
+  cardSize: number
+  sortKey: SortKey
+  sortDir: SortDir
+  viewMode: ViewMode
+  theme: Theme
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -119,10 +158,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   blendAutoConvert: true,
   background: 'transparent',
   lighting: 'studio',
+  thumbAngle: 'iso',
+  thumbShading: 'material',
   sidebarVisible: true,
   showUnsupported: true,
   cacheLimitMB: 2048,
-  disableGpu: false
+  disableGpu: false,
+  reopenLast: true,
+  lastFolder: null,
+  pinnedFolders: [],
+  cardSize: 176,
+  sortKey: 'name',
+  sortDir: 'asc',
+  viewMode: 'grid',
+  theme: 'light'
 }
 
 /** 收藏与标签库。路径统一小写化后作为键（Windows 路径不区分大小写） */
@@ -131,6 +180,10 @@ export interface LibraryPayload {
   tags: Record<string, string[]>
   /** 库里出现过的全部标签，供筛选下拉用 */
   allTags: string[]
+  /** 评分 1–5，没评分的不出现 */
+  ratings: Record<string, number>
+  /** 颜色标签（见 labels.ts） */
+  colors: Record<string, string>
 }
 
 export interface ThumbRequest {
@@ -138,6 +191,8 @@ export interface ThumbRequest {
   priority: number
   lighting: LightingPreset
   background: ThumbBackground
+  angle?: ThumbAngle
+  shading?: ThumbShading
 }
 
 export interface AppInfo {
@@ -176,5 +231,56 @@ export type MenuAction =
   | 'zoom-in'
   | 'zoom-out'
   | 'toggle-sidebar'
+  | 'toggle-view'
+  | 'find-dupes'
+  | 'export-csv'
   | 'shortcuts'
   | 'about'
+
+/* ---------------- 文件操作 ---------------- */
+
+export interface RenameResult {
+  ok: boolean
+  entry?: ModelEntry
+  error?: string
+  /** 一起改名的伴生文件（.fbm 目录等） */
+  companions?: string[]
+  /** 搬到新键的缩略图（有缓存时） */
+  thumb?: ThumbResult
+}
+
+export interface MoveResult {
+  ok: boolean
+  moved: number
+  failed: string[]
+  /** 目标目录 */
+  dir?: string
+}
+
+export interface TrashResult {
+  ok: boolean
+  done: number
+  failed: string[]
+}
+
+/* ---------------- 重复文件 ---------------- */
+
+export interface DupeGroup {
+  size: number
+  hash: string
+  paths: string[]
+}
+
+export interface DupeProgress {
+  /** 已算完哈希的文件数 */
+  done: number
+  /** 需要算哈希的文件数 */
+  total: number
+}
+
+export interface DupeResult {
+  groups: DupeGroup[]
+  /** 参与比对的文件数 */
+  scanned: number
+  cancelled?: boolean
+}

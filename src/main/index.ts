@@ -28,10 +28,14 @@ import { importHdri, listHdri, removeHdri, userHdriDir } from './hdri'
 import { loadWindowState, trackWindowState } from './windowState'
 import {
   addTagTo,
-  allTags,
+  forget,
   getLibrary,
+  libraryPayload,
+  rekey,
   removeTagFrom,
+  setColor,
   setFavorites,
+  setRating,
   setTags,
   toggleFavorite
 } from './library'
@@ -40,13 +44,17 @@ import {
   createWorkers,
   destroyWorkers,
   invalidateThumb,
+  migrateThumb,
   requestGlbExport,
   requestThumb,
   resolveViewableUrl,
+  setCustomThumb,
   setPaused,
   setProgressListener,
   setVisible
 } from './thumbnailer'
+import { moveModels, relocateEntry, renameModel } from './fileOps'
+import { findDuplicates } from './dupes'
 import { initLog, installGlobalHandlers, log, logDirectory } from './log'
 import { parseLaunchArgs } from './argv'
 import { installMenu } from './menu'
@@ -54,12 +62,16 @@ import pkg from '../../package.json'
 import type {
   AppInfo,
   AppSettings,
+  DupeResult,
   ExportBatchResult,
   MenuAction,
   ModelEntry,
+  MoveResult,
+  RenameResult,
   ScanOptions,
   ScanResult,
-  ThumbRequest
+  ThumbRequest,
+  TrashResult
 } from '../shared/types'
 
 // 这几件事必须赶在 app ready 之前做：
@@ -309,6 +321,7 @@ ipcMain.handle('scan:folder', async (_e, root: string, opts: ScanOptions): Promi
       return result
     }
     pushRecentFolder(root)
+    saveSettings({ lastFolder: root })
     refreshMenu()
     startWatcher(root)
     log.info('scan', `${root}: ${result.entries.length} 个模型 / ${result.scannedFiles} 个文件 / ${result.elapsedMs}ms`)
@@ -416,7 +429,18 @@ ipcMain.handle('settings:removeRecent', (_e, dir: string) => {
  * 推送过去时还没人监听，事件就丢了。
  */
 ipcMain.handle('app:initialFolder', () => {
-  return parseLaunchArgs(process.argv, { isPackaged: app.isPackaged })
+  const fromArgs = parseLaunchArgs(process.argv, { isPackaged: app.isPackaged })
+  if (fromArgs) return fromArgs
+  // 没带参数时按设置打开上次的文件夹（目录还在才开）
+  const s = getSettings()
+  if (s.reopenLast && s.lastFolder) {
+    try {
+      if (fs.statSync(s.lastFolder).isDirectory()) return s.lastFolder
+    } catch {
+      /* 目录没了 */
+    }
+  }
+  return null
 })
 
 ipcMain.handle('app:info', (): AppInfo => ({
@@ -451,7 +475,7 @@ ipcMain.handle('blender:open', async (_e, filePath: string) => {
 
 /* --------------------- 收藏与标签 --------------------- */
 
-ipcMain.handle('library:get', () => ({ ...getLibrary(), allTags: allTags() }))
+ipcMain.handle('library:get', () => libraryPayload())
 
 ipcMain.handle('library:toggleFavorite', (_e, p: string) => toggleFavorite(p))
 
@@ -462,17 +486,137 @@ ipcMain.handle('library:setFavorites', (_e, paths: string[], value: boolean) => 
 
 ipcMain.handle('library:addTag', (_e, paths: string[], tag: string) => {
   addTagTo(paths, tag)
-  return { ...getLibrary(), allTags: allTags() }
+  return libraryPayload()
 })
 
 ipcMain.handle('library:removeTag', (_e, paths: string[], tag: string) => {
   removeTagFrom(paths, tag)
-  return { ...getLibrary(), allTags: allTags() }
+  return libraryPayload()
 })
 
 ipcMain.handle('library:setTags', (_e, p: string, tags: string[]) => {
   setTags(p, tags)
-  return { ...getLibrary(), allTags: allTags() }
+  return libraryPayload()
+})
+
+ipcMain.handle('library:setRating', (_e, paths: string[], rating: number) => {
+  setRating(paths, rating)
+  return libraryPayload()
+})
+
+ipcMain.handle('library:setColor', (_e, paths: string[], color: string | null) => {
+  setColor(paths, color)
+  return libraryPayload()
+})
+
+/* --------------------- 文件操作 --------------------- */
+
+ipcMain.handle(
+  'fs:rename',
+  async (_e, entry: ModelEntry, newName: string, root: string, req: ThumbRequest): Promise<RenameResult> => {
+    const r = await renameModel(entry.path, newName)
+    if (!r.ok || !r.newPath) return { ok: false, error: r.error ?? '改名失败' }
+    if (r.newPath === entry.path) return { ok: true, entry, companions: [] }
+    rekey(entry.path, r.newPath)
+    const next = relocateEntry(entry, r.newPath, root)
+    // 缓存键含文件名，搬一份过去免得重新出图；搬不了就让界面重新请求
+    const migrated = await migrateThumb(entry, next, req)
+    log.info('fs', `改名 ${entry.rel} -> ${next.rel}`)
+    return { ok: true, entry: next, companions: r.companions, thumb: migrated ?? undefined }
+  }
+)
+
+ipcMain.handle('fs:move', async (_e, entries: ModelEntry[], destDir: string): Promise<MoveResult> => {
+  try {
+    const r = await moveModels(entries.map((e) => e.path), destDir)
+    for (const m of r.moved) rekey(m.from, m.to)
+    log.info('fs', `移动到 ${destDir}: ${r.moved.length} 成功 / ${r.failed.length} 失败`)
+    return { ok: r.failed.length === 0, moved: r.moved.length, failed: r.failed, dir: destDir }
+  } catch (e) {
+    return { ok: false, moved: 0, failed: [e instanceof Error ? e.message : String(e)], dir: destDir }
+  }
+})
+
+/** 删除到回收站（可在资源管理器里找回），不做永久删除 */
+ipcMain.handle('fs:trash', async (_e, paths: string[]): Promise<TrashResult> => {
+  let done = 0
+  const failed: string[] = []
+  for (const p of paths) {
+    try {
+      await shell.trashItem(p)
+      done++
+    } catch (e) {
+      failed.push(`${path.basename(p)}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  forget(paths)
+  log.info('fs', `回收站: ${done} 成功 / ${failed.length} 失败`)
+  return { ok: failed.length === 0, done, failed }
+})
+
+/* --------------------- 重复文件 --------------------- */
+
+let dupeToken = 0
+
+ipcMain.handle('dupes:find', async (_e, files: { path: string; size: number }[]): Promise<DupeResult> => {
+  const token = ++dupeToken
+  const r = await findDuplicates(files, {
+    onProgress: (p) => {
+      if (token === dupeToken) send('dupes:progress', p)
+    },
+    isCancelled: () => token !== dupeToken
+  })
+  log.info('dupes', `${files.length} 个文件，${r.groups.length} 组重复`)
+  return r
+})
+
+ipcMain.handle('dupes:cancel', () => {
+  dupeToken++
+  return true
+})
+
+/** 查看器当前视角写成缩略图 */
+ipcMain.handle('thumb:setCustom', async (_e, entry: ModelEntry, req: ThumbRequest, dataUrl: string) => {
+  const b64 = dataUrl.replace(/^data:image\/png;base64,/, '')
+  return await setCustomThumb(entry, req, Buffer.from(b64, 'base64'))
+})
+
+/** 保存文本文件（CSV 清单等） */
+ipcMain.handle(
+  'export:text',
+  async (_e, suggestedName: string, content: string, filterName: string, ext: string) => {
+    if (!mainWindow) return null
+    const r = await dialog.showSaveDialog(mainWindow, {
+      title: '保存',
+      defaultPath: suggestedName,
+      filters: [{ name: filterName, extensions: [ext] }]
+    })
+    if (r.canceled || !r.filePath) return null
+    await fsp.writeFile(r.filePath, content, 'utf8')
+    return r.filePath
+  }
+)
+
+/** 转盘序列：选个目录，把每一帧写成 name_01.png … */
+ipcMain.handle('export:frames', async (_e, dirTitle: string, baseName: string, frames: string[]) => {
+  if (!mainWindow) return { ok: false, error: '无窗口' }
+  const r = await dialog.showOpenDialog(mainWindow, {
+    title: dirTitle,
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (r.canceled || r.filePaths.length === 0) return { ok: false }
+  const dir = r.filePaths[0]
+  try {
+    const pad = String(frames.length).length
+    for (let i = 0; i < frames.length; i++) {
+      const b64 = frames[i].replace(/^data:image\/png;base64,/, '')
+      await fsp.writeFile(path.join(dir, `${baseName}_${String(i + 1).padStart(pad, '0')}.png`), Buffer.from(b64, 'base64'))
+    }
+    log.info('export', `转盘序列 ${frames.length} 帧 -> ${dir}`)
+    return { ok: true, dir }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 })
 
 /* --------------------- 批量导出 --------------------- */

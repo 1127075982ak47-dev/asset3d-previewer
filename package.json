@@ -1,6 +1,6 @@
 {
   "name": "asset3d-previewer",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "3D 资源预览器 - 免费的绿色版 3D 素材批量缩略图浏览与查看工具",
   "main": "./out/main/index.js",
   "author": "asset3d",
@@ -15,6 +15,7 @@
     "verify:render": "electron scripts/verify-render.cjs",
     "verify:ui": "electron scripts/verify-ui.cjs",
     "verify:viewer": "electron scripts/verify-viewer.cjs",
+    "verify:library": "electron scripts/verify-library.cjs",
     "verify:drag": "electron scripts/verify-drag.cjs",
     "verify:blend": "node scripts/verify-blend.mjs"
   },

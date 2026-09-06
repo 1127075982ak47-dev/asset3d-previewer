@@ -7,6 +7,9 @@
  *   name #1/hash.obj                         目录名带 #（URL 编码）
  *   cloud.ply                                无面点云（应按点渲染而不是空白）
  *   old.max / scene.c4d                      无法预览的私有格式（应列出但标记不支持）
+ *   dupes/a/box.obj + dupes/b/box_copy.obj  内容完全相同的两个文件（重复查找）
+ *   walk.bvh                                 动捕骨骼（骨架线 + 动画）
+ *   variants.gltf                            KHR_materials_variants 两个材质变体
  *
  * 用法: node scripts/make-fixtures.mjs [输出目录]   默认 .fixtures/
  */
@@ -144,6 +147,114 @@ w('name #1/hash.mtl', 'newmtl m\nKd 0.9 0.5 0.2\n')
   const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1
   for (let i = 0; i < n; i++) s += `${rnd().toFixed(4)} ${rnd().toFixed(4)} ${rnd().toFixed(4)}\n`
   w('cloud.ply', s)
+}
+
+// 重复文件：内容完全一致，只是名字和目录不同
+{
+  const same = cubeObj('box.mtl', 'm')
+  w('dupes/a/box.obj', same)
+  w('dupes/a/box.mtl', 'newmtl m\nKd 0.2 0.6 0.9\n')
+  w('dupes/b/box_copy.obj', same)
+  w('dupes/b/box.mtl', 'newmtl m\nKd 0.2 0.6 0.9\n')
+}
+
+// BVH 动捕：4 个关节、10 帧
+{
+  const frames = []
+  for (let i = 0; i < 10; i++) {
+    const t = i / 10
+    const sway = (Math.sin(t * Math.PI * 2) * 20).toFixed(2)
+    frames.push(`0 30 0 0 0 0  0 0 ${sway}  0 0 0  ${sway} 0 0`)
+  }
+  w(
+    'walk.bvh',
+    [
+      'HIERARCHY',
+      'ROOT Hips',
+      '{',
+      '  OFFSET 0 0 0',
+      '  CHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation',
+      '  JOINT Spine',
+      '  {',
+      '    OFFSET 0 10 0',
+      '    CHANNELS 3 Zrotation Xrotation Yrotation',
+      '    JOINT Head',
+      '    {',
+      '      OFFSET 0 10 0',
+      '      CHANNELS 3 Zrotation Xrotation Yrotation',
+      '      End Site',
+      '      {',
+      '        OFFSET 0 5 0',
+      '      }',
+      '    }',
+      '  }',
+      '  JOINT LeftLeg',
+      '  {',
+      '    OFFSET 3 0 0',
+      '    CHANNELS 3 Zrotation Xrotation Yrotation',
+      '    End Site',
+      '    {',
+      '      OFFSET 0 -10 0',
+      '    }',
+      '  }',
+      '}',
+      'MOTION',
+      `Frames: ${frames.length}`,
+      'Frame Time: 0.1',
+      ...frames,
+      ''
+    ].join('\n')
+  )
+}
+
+// glTF 材质变体：一个四边形，红 / 蓝两个变体
+{
+  const pos = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0])
+  const idx = new Uint16Array([0, 1, 2, 0, 2, 3])
+  const buf = Buffer.concat([Buffer.from(pos.buffer), Buffer.from(idx.buffer)])
+  w(
+    'variants.gltf',
+    JSON.stringify({
+      asset: { version: '2.0' },
+      extensionsUsed: ['KHR_materials_variants'],
+      extensions: { KHR_materials_variants: { variants: [{ name: '红色' }, { name: '蓝色' }] } },
+      buffers: [{ byteLength: buf.length, uri: 'data:application/octet-stream;base64,' + buf.toString('base64') }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: 48 },
+        { buffer: 0, byteOffset: 48, byteLength: 12 }
+      ],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [-1, -1, 0], max: [1, 1, 0] },
+        { bufferView: 1, componentType: 5123, count: 6, type: 'SCALAR' }
+      ],
+      materials: [
+        { name: 'red', pbrMetallicRoughness: { baseColorFactor: [0.9, 0.2, 0.2, 1] } },
+        { name: 'blue', pbrMetallicRoughness: { baseColorFactor: [0.2, 0.4, 0.9, 1] } }
+      ],
+      meshes: [
+        {
+          primitives: [
+            {
+              attributes: { POSITION: 0 },
+              indices: 1,
+              material: 0,
+              extensions: {
+                KHR_materials_variants: {
+                  mappings: [
+                    { material: 0, variants: [0] },
+                    { material: 1, variants: [1] }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ],
+      nodes: [{ mesh: 0 }],
+      scenes: [{ nodes: [0] }],
+      scene: 0
+    })
+  )
 }
 
 w('old.max', 'not really a max file')

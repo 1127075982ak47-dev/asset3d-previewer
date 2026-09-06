@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useEscape } from './Dialogs'
 import type { AppInfo } from '../shared/types'
 import { MESH_EXTS } from '../shared/formats'
 
@@ -8,6 +9,7 @@ interface Props {
 
 export default function AboutDialog({ onClose }: Props): JSX.Element {
   const [info, setInfo] = useState<AppInfo | null>(null)
+  useEscape(onClose)
   useEffect(() => {
     void window.api.appInfo().then(setInfo)
   }, [])

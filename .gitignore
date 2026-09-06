@@ -16,3 +16,6 @@ release/
 .verify-out-gltf/
 .fixtures/
 .verify-out-*/
+.verify-lib/
+.verify-lib-data/
+.verify-out-fixtures/
