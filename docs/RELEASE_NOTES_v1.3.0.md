@@ -7,7 +7,8 @@
 - **win64-绿色版.zip**：普通用户下载，完整解压后运行 3D资源预览器.exe，约 153 MB。
 - **源码工程.zip**：当前公开提交源码，约 5 MB。
 - **开发工程完整包（含git历史）.zip**：继续开发使用，包含经过整理的公开 Git 历史。
-- **发布清单.json**：版本、公开提交、运行源码指纹、附件大小和 SHA256。
+- **SHA256.json**：版本、公开提交、运行源码指纹、附件大小和 SHA256。
+- **demo-zh.mp4**：65 秒中文功能讲解，1080p / 30 fps，实际软件录制。
 
 GitHub 自动生成的 Source code 附件仅包含源码；普通用户请选择绿色版。
 
@@ -35,3 +36,10 @@ GitHub 自动生成的 Source code 附件仅包含源码；普通用户请选择
 尚未做多机长期稳定性测试，发布包尚未代码签名。升级时关闭程序，再复制旧版 data 到新版 exe 同级。
 
 完整变更与验证范围见 CHANGELOG.md、docs/RELEASE_VALIDATION.md；开发见 HANDOFF.md。
+
+## 直观看功能
+
+主页已提供真实录屏动图：素材浏览、显示模式切换、剖切和 A/B 对比。
+[查看产品展示首页](https://github.com/1127075982ak47-dev/asset3d-previewer#readme)
+
+[观看 / 下载中文讲解视频](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)

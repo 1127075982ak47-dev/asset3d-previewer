@@ -296,4 +296,3 @@ three.js 里只有 PBR 材质吃 `scene.environment`，`MeshPhongMaterial` 收�
 旧缩略图在 v1.3 会自动重建，无需删除收藏。
 
 开发交接见 `../HANDOFF.md`；快速使用见 `QUICKSTART.txt`；本轮验收见 `RELEASE_VALIDATION.md`。
-
