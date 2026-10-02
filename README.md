@@ -1,355 +1,153 @@
-# 3D 资源预览器 · Asset3D Previewer
+<div align="center">
+  <img src="build/icon.png" width="80" alt="3D 资源预览器图标">
+  <h1>3D 资源预览器</h1>
+  <p><strong>素材找得快，模型看得清。</strong></p>
+  <p>免费开源 · 中文界面 · Windows 绿色版 · 本地离线</p>
+  <p>
+    <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-win64-portable.zip"><strong>下载 Windows 绿色版</strong></a>
+    &nbsp; · &nbsp;
+    <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-source.zip">下载完整源码</a>
+    &nbsp; · &nbsp;
+    <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/releases/tag/v1.3.0">全部下载与更新说明</a>
+  </p>
+  <p>
+    <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml"><img src="https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml/badge.svg" alt="Windows CI"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-286fe0" alt="MIT 许可"></a>
+    <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/releases/latest"><img src="https://img.shields.io/github/v/release/1127075982ak47-dev/asset3d-previewer?color=286fe0" alt="最新版本"></a>
+  </p>
+</div>
 
-[![Windows CI](https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml/badge.svg)](https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml)
+## 先看一段真实演示
 
-**免费开源的 Windows 3D 素材浏览器。中文界面、本地离线、解压即用。**
+[![65 秒中文讲解：素材墙、显示模式、HDRI、剖切和 A/B 对比](docs/images/video-cover.png)](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)
 
-[下载最新版](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/latest) · [快速使用](docs/QUICKSTART.txt) · [开发交接](HANDOFF.md) · [更新日志](CHANGELOG.md) · [反馈问题](https://github.com/1127075982ak47-dev/asset3d-previewer/issues)
+**[观看 / 下载 65 秒中文讲解](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)** · 1080p / 30 fps · 软件实际录制
 
-A free, open-source, offline 3D asset browser and viewer for Windows, built with Electron, React and three.js.
+做这个工具的想法很简单：面对一大堆模型文件，能先看见它们，再决定用哪一个。
+它把日常浏览、预览、检查与整理放在一个窗口里，免费分享给喜欢三维创作的朋友。
 
-![3D 查看器：材质、白膜、贴图通道、平滑/平直和 AO](docs/images/viewer.png)
+*A free, open-source, offline 3D asset browser and viewer for Windows, built with Electron, React and three.js.*
 
-## 下载安装
+## 翻一翻素材墙
 
-1. 打开 [Releases 下载页](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/latest)。
-2. 普通用户下载带 `win64-绿色版.zip` 的附件，完整解压后双击 `3D资源预览器.exe`。
-3. 按 Ctrl+O 选择模型文件夹，双击缩略图进入查看器，按 Esc 返回。
+选一个文件夹，模型自动生成缩略图。网格与列表随时切换，可搜索名称、路径和标签；
+大素材库优先处理当前可见模型。收藏、星级、颜色和标签，把好用的素材留在手边。
 
-运行环境：Windows 10/11 x64。不需要安装 Node.js；`.blend` 交互预览和转换需要另外安装兼容版本的 Blender。
-发布附件的 SHA256 见同页发布清单。源码和完整 Git 开发包也在 Releases 中。
+![实际演示：批量缩略图与素材浏览](docs/images/browse.gif)
 
-## 主要功能
+## 给模型换一种看法
 
-- 批量扫描、虚拟化网格/列表、搜索与筛选、可见素材优先出图。
-- 白膜、雕塑、法线、UV、线框、透视、平滑/平直、AO 与阴影。
-- 内置 HDRI、自定义 HDR/EXR 环境、背景显示开关、曝光与色调映射。
-- 动画、材质变体、剖切、两点测量、贴图通道、结构检查与 A/B 对比。
-- 收藏、标签、评分、颜色、重复文件查找、回收站和资源库备份。
-- GLB/原格式导出、截图、转盘 PNG 序列、接触表和 CSV 清单。
+双击进入查看器，切换 **材质、白膜、雕塑、法线、UV、线框或透视**。
+平滑 / 平直、线框叠加、AO、阴影和贴图通道检查，都可以按需要调整。
 
-查看器打开时暂停后台缩略图，静止场景按需绘制；GPU 硬件加速默认开启。
+![实际演示：材质、白膜、法线与线框切换](docs/images/modes.gif)
 
-批量预览 3D 素材的桌面工具。指向一个文件夹，立刻得到一墙可辨认的 3D 缩略图；
-双击任意一个即可全屏放大、拖拽旋转、切换白膜 / 线框 / 法线等显示模式、换 HDRI 环境光，
-还能剖切、测量、检查贴图通道、并排对比两个模型。
+## 换一套光照，发现另一面
 
-**免费软件，MIT 许可，没有任何付费功能，不联网。**
+内置四张小体积 HDRI，支持导入自己的 **HDR / EXR**。
+环境光强度、旋转、曝光和色调映射可调整；也能选择让环境直接出现在背景里。
 
-解决的问题：Windows 资源管理器不给 3D 文件生成缩略图。一个装了 35 个模型的
-素材包，在资源管理器里是 105 个一模一样的通用图标（模型混着 `.bin` 和贴图），
-想知道哪个是哪个只能逐个拖进 Blender。
+![实际界面：HDRI 环境光与可见背景](docs/images/environment.png)
 
-界面是浅色玻璃风格（淡蓝 / 淡紫渐变底、磨砂白面板），设置里可以切到深色。
+## 切开看内部，并排看差别
 
-## 支持格式
+剖切平面沿 X / Y / Z 轴移动，检查模型内部；两点测量、骨骼、顶点法线和结构面板用于进一步查看。
+
+![实际演示：沿轴移动剖切平面](docs/images/section.gif)
+
+选中两个模型进入 **A/B 对比**，联动旋转和缩放，直观看到版本、颜色或结构的区别。
+
+![实际演示：两个模型并排对比与自动旋转](docs/images/compare.gif)
+
+## 看完，还能整理与导出
+
+- **资源库**：固定常用目录、收藏、标签、评分、颜色筛选，以及记录备份与导入。
+- **文件整理**：重命名、移动、重复查找和回收站；处理已识别依赖，报告同名冲突与部分失败。
+- **导出**：GLB、原格式、截图、透明 PNG 转盘序列、接触表和 CSV 清单。
+- **Blender**：提取 `.blend` 内嵌图，调用已安装的兼容版本转换或打开模型。
+
+## 下载与开始使用
+
+当前稳定版本：**v1.3.0**。普通用户选择绿色版，完整解压后双击 `3D资源预览器.exe`。
+
+| 下载 | 适合谁 | 说明 |
+|---|---|---|
+| **[Windows 绿色版](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-win64-portable.zip)** | 直接使用 | 完整运行文件，约 153 MB；无需 Node.js |
+| **[完整源码](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-source.zip)** | 查看与编译源码 | v1.3.0 公开源码与锁文件 |
+| **[完整开发工程（含 Git 历史）](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-developer-with-history.zip)** | 换电脑继续开发 | 源码、文档与经过整理的公开提交历史 |
+| [SHA256 校验清单](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-SHA256.json) | 校验下载文件 | 文件大小、公开提交与 SHA256 |
+| [65 秒中文功能演示](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4) | 先了解功能 | MP4，1080p / 30 fps，约 22 MB |
+
+1. 完整解压绿色版，运行 exe。
+2. 按 **Ctrl+O** 打开素材目录，双击缩略图查看模型。
+3. 左键旋转、滚轮缩放、右键平移；**Esc** 返回，**F1** 查看快捷键。
+
+Windows 10/11 x64。GPU 硬件加速默认开启，修改后需重启。
+升级时先关闭程序，再把旧版 `data` 复制到新版 exe 同级；记录按绝对素材路径关联。
+
+> `.blend` 的 3D 交互需要兼容版本 Blender。MAX、C4D、SKP、STEP 等私有或 CAD 格式只列出，不能直接预览。
+> 目前发布包尚未代码签名；验证范围见 [验收报告](docs/RELEASE_VALIDATION.md)。
+
+## 支持哪些格式
 
 | 类别 | 格式 |
 |---|---|
-| 开箱即用 | `glb` `gltf` `fbx` `obj` `stl` `ply` `dae` `3ds` `3mf` `wrl` `vrm` `usdz` `amf` `pcd` `vtk` `vtp` `drc` `xyz` `lwo` `vox` `kmz` `md2` `pmx` `pmd` `3dm` `gcode` `bvh` |
-| 需要 Blender | `blend` |
-| 只列出、不预览 | `max` `ma` `mb` `c4d` `skp` `ztl` `abc` `usd` `usda` `usdc` `step` `stp` `iges` `dxf` `lws` `x` `spp` `sbs` `sbsar` `hip` `uasset` 等私有格式（可拖出、用默认程序打开、收藏打标；可在设置里关掉） |
+| 直接预览 | GLB / glTF、FBX、OBJ、STL、PLY、DAE、3DS、3MF、WRL、VRM、USDZ、AMF、PCD、VTK / VTP、DRC、XYZ、LWO、VOX、KMZ、MD2、PMX / PMD、3DM、GCode、BVH |
+| 通过 Blender | `.blend` 内嵌图；完整交互与 GLB 转换需要兼容版本 Blender |
+| 只列出 | MAX、MA / MB、C4D、SKP、ABC、USD、STEP、IGES 等私有或 CAD 格式 |
 
-`.bin`、`.mtl`、贴图、Godot `.import` 等会被自动识别为伴生文件并隐藏，只留下真正的模型。
-贴图支持 png / jpg / webp / tga / dds / ktx2 等；FBX 引用了不存在的 `.fbm` 目录时会自动在模型旁边找同名贴图。
-glTF 的 `KHR_materials_variants` 材质变体可以在查看器里切换。
+`.bin`、`.mtl`、贴图和常见导入元数据作为伴生文件隐藏。外部依赖与非标准资源路径的限制见 [完整使用说明](docs/USER_GUIDE.md)。
 
-## 使用
+## 开发与一起改进
 
-解压后双击 `3D资源预览器.exe`。不需要安装任何东西。
-
-也可以把文件夹直接拖到 exe 上，或带参数启动：
-
-```bash
-"3D资源预览器.exe" --folder="D:\素材\FreePack"
-```
-
-程序是单实例的：再启动一次只会把新文件夹交给已经开着的窗口。
-默认启动时自动打开上次的文件夹（设置里可关）。
-
-### 网格 / 列表
-
-| 操作 | 效果 |
-|---|---|
-| Ctrl+O / F5 | 打开文件夹 / 重新扫描 |
-| Ctrl+F | 搜索（名称、路径、标签） |
-| Ctrl+L | 网格 / 列表视图切换（列表可点列头排序） |
-| 双击 / Enter | 放大进入查看器 |
-| 方向键 / Home / End / PgUp / PgDn | 移动焦点 |
-| Ctrl+点击 / Shift+点击 / Ctrl+A | 多选 / 连选 / 全选 |
-| Ctrl+D | 收藏 / 取消收藏 |
-| 0 – 5 | 评分（0 清除） |
-| F2 | 重命名 |
-| Delete | 删除到回收站（可找回） |
-| Ctrl+B | 侧栏 |
-| Ctrl+= / Ctrl+- | 放大 / 缩小卡片 |
-| F1 | 快捷键帮助 |
-
-筛选行：格式、收藏、动画、失败、评分（3 星 / 4 星 / 5 星以上）、颜色标签、面数区间、标签。
-排序：名称 / 大小 / 修改时间 / 格式 / 面数 / 评分，可升降序；排序、视图和卡片大小会被记住。
-
-侧栏上半是**资源库**：把常用的素材文件夹固定进去，一键切换；下半是当前文件夹的子目录树。
-
-选中一个或多个后，底部出现批量操作条：收藏、评分、颜色标签、标签、重命名、移动到文件夹、
-回收站、对比（选中两个时）、导出到文件夹、转为 GLB 导出、接触表、复制路径。
-
-右键卡片：放大查看、收藏、评分、颜色、编辑标签、重命名、移动、回收站、用 Blender 打开、
-用默认程序打开、在资源管理器中显示、复制路径、重新生成缩略图、查看失败原因、导出为 GLB、导出清单。
-
-状态栏右侧：**查找重复**（按文件内容哈希，先按大小分组所以很快；可一键把副本移到回收站或打上「重复」标签）、
-**导出清单**（CSV，含路径、大小、面数、顶点、材质数、贴图数、动画、尺寸、收藏、评分、颜色、标签，Excel 直接打开不乱码）、**固定文件夹**。
-
-移动 / 重命名会带上伴生文件：`.gltf` 的 `.bin` 与贴图、`.obj` 的 `.mtl` 与贴图、`.fbx` 的 `.fbm` 目录；
-收藏、标签、评分、颜色会跟着新路径走；缩略图缓存也会直接沿用，不重新出图。
-
-### 查看器
-
-| 操作 | 效果 |
-|---|---|
-| 左键拖拽 / 滚轮 / 右键拖拽 | 旋转 / 缩放 / 平移 |
-| 双击画布 / `F` | 重置视角 |
-| 右下角导航球 | 点轴向切到对应视角 |
-| `1` `3` `7` `5` | 前视 / 侧视 / 顶视 / 等轴 |
-| `W` `G` `R` | 线框 / 地面网格 / 自动旋转 |
-| `M` / `X` | 两点测量 / 剖切平面 |
-| `B` / `N` | 骨骼 / 顶点法线 |
-| `空格` | 播放 / 暂停动画 |
-| `←` `→` | 上一个 / 下一个模型 |
-| `Tab` | 显示 / 隐藏右侧面板 |
-| `Esc` | 退出测量 / 返回网格 |
-
-顶栏：收藏、评分、**对比**（选另一个模型并排显示，旋转缩放同步）、**设为缩略图**（用当前视角替换网格里这个模型的缩略图）、
-截图（当前视图 / 2 倍 / 透明 / 转盘序列 12 · 24 · 36 帧）、定位文件。
-
-右侧面板七页：
-
-- **显示**：材质 / 白膜 / 雕塑（Matcap）/ 法线 / UV 棋盘 / 线框 / 透视；**贴图通道**：基础色 / 粗糙度 / 金属度 / 法线贴图 / AO 贴图 / 自发光 / 顶点色（不受光照影响，直接看贴图数据）；平滑 / 平直着色；线框叠加；环境光遮蔽（GTAO）；地面阴影；网格 / 坐标轴 / 包围盒 / 导航球；背景色。
-- **环境**：程序化房间或 HDRI 环境光（内置 4 张 Poly Haven CC0 HDRI，可导入自己的 .hdr / .exr）；强度、旋转、是否显示为背景、背景模糊；补光预设、光方向、光强度；曝光；色调映射（ACES / AgX / Neutral / Linear / 无）。
-- **相机**：视角预设、透视 / 正交、视场角、自动旋转。
-- **工具**：剖切平面（X / Y / Z 轴、位置、翻转）；两点测距（按信息页选的单位换算）；骨骼、顶点法线、性能 HUD；点云点大小。
-- **动画**：片段选择、时间轴、速度、循环。
-- **结构**：材质变体（glTF）、节点树（勾选隐藏、双击单独显示）、材质与贴图清单（点贴图名可放大查看、定位贴图文件）。
-- **信息**：文件信息、几何统计、骨骼 / 顶点色、尺寸与单位换算。
-
-### 拖进 Blender
-
-选好的卡片可以直接拖出窗口，扔进 Blender、Unity、UE 或资源管理器。
-`Ctrl` 点选、`Shift` 连选、`Ctrl+A` 全选，可以一次拖多个。
-
-拖的是模型文件本身，不带 `.bin` 和贴图 —— 导入器会自己按相对路径找这些
-伴生文件，多拖反而会被当成多个独立文件重复导入。
-
-Blender 那边能不能接住，取决于版本（可以用下面这条命令查自己的版本支持哪些）：
-
-| Blender | 可拖入的格式 |
-|---|---|
-| 4.5 | `.fbx` `.glb` `.gltf` |
-| 5.1 | `.glb` `.gltf`（**`.fbx` 不支持**，是 Blender 自己的回退） |
-
-```bash
-blender -b --python-expr "import bpy;print([(c.bl_file_extensions,c.bl_import_operator) for c in bpy.types.FileHandler.__subclasses__()])"
-```
-
-`.blend` 一直可以直接拖入（Blender 会打开它）。如果你的 Blender 版本
-不接受某个格式，右键卡片「用 Blender 打开」（会调用对应导入器）或「导出为 GLB」再拖那个 GLB 即可。
-
-## 绿色版说明
-
-所有配置和缓存写在 exe 同级的 `data/` 目录里，包括 Chromium 自己的缓存：
-
-```
-data/
-├─ thumbs/      缩略图缓存（按文件名+大小+修改时间索引，换盘符也能命中）
-├─ glb/         Blender 转换出的 GLB
-├─ hdri/        你自己导入的 HDRI
-├─ logs/        app.log（2 MB 轮转）
-├─ settings.json / library.json（收藏、标签、评分、颜色）/ recent.json / window.json
-```
-
-不写注册表，不碰 `%APPDATA%`。整个文件夹拷到 U 盘或另一台机器可以直接跑。
-缓存有上限（默认 2 GB，设置里可改），超出后自动删最久没用的。
-
-若程序所在目录不可写（只读介质、放在 Program Files 且无权限），会自动退回
-系统默认位置，不会因此启动失败。
-
-出了问题先看 `data/logs/app.log`（菜单：帮助 → 打开日志目录）。缩略图全部失败、
-画面花屏多半是显卡驱动问题，可以在设置里取消勾选「GPU 硬件加速」后重启试试 ——
-但那样 3D 会全部由 CPU 软件渲染、非常卡，只作为最后手段。软件渲染时界面顶部会有醒目提示。
-
-**很卡？** 查看器里 AO、地面阴影、线框叠加、顶点法线都要额外开销，大模型上按需开；
-查看器打开期间后台出图会自动暂停，画面静止时不重绘。工具页的「性能 HUD」能看到帧率和绘制调用数。
-
-## 关于 .blend
-
-`.blend` 是唯一需要外部依赖的格式 —— **没有任何 JS 库能解析 .blend 的几何体，
-只有 Blender 自己能读**。所以采用分层策略：
-
-1. **内嵌预览图**（毫秒级，零依赖）——
-   直接从 `.blend` 文件里抠出保存时写入的预览图，网格上立刻有图。
-   支持 2.8 到 5.x 的文件头（5.0 起换了新格式），支持 gzip 和 zstd 压缩。
-2. **转成 GLB**（后台自动，需要 Blender）——
-   调用本机已安装的 Blender 无头导出 GLB 并缓存，转完之后该文件就能
-   和其它格式一样自由旋转缩放。
-
-程序会自动探测各盘符 `Program Files\Blender Foundation\` 下的所有版本、Steam 版
-以及 PATH 上的 blender，并**按版本匹配**：读取 `.blend` 头部记录的保存版本，
-挑一个不低于它的 Blender 来转（高版本存的文件低版本打不开）。
-也可以在设置里手动指定路径。
-
-转换是**批量**做的：一个 Blender 进程里循环 `open_mainfile` 处理 12 个文件，
-带看门狗 —— 一个文件卡死不会拖累同批其它文件。每转完一个就立刻刷新对应卡片。
-
-### 内嵌预览图什么时候会被丢弃
-
-Blender 的 `Preferences > Save & Load > File Preview Type` 有三种模式：
-
-- `Camera View` / `Auto` —— 渲染模型，输出接近正方形（128×128）
-- `Screenshot` —— **截整个应用窗口**，输出是窗口比例（如 128×68）
-
-后者拿来当缩略图毫无意义：满屏是大纲视图和属性面板，模型只是正中间一个小点。
-所以宽高比明显偏离正方形的内嵌图会被直接丢弃，宁可留占位符等真渲染。
-
-已知限制：
-
-- 没装 Blender 时，`.blend` 只能看内嵌预览图，无法进入 3D 交互。
-- **Blender 无头模式（`-b`）保存的 .blend 不含内嵌预览图**，这类文件必须靠第 2 层转换才能有缩略图。
-
-## 开发
-
-```bash
-npm run setup      # 锁定依赖安装 + Electron 下载及 SHA256 校验
+```powershell
+git clone https://github.com/1127075982ak47-dev/asset3d-previewer.git
+cd asset3d-previewer
+npm run setup
 npm run dev
 ```
 
-```bash
-npm run typecheck   # tsc
-npm test            # vitest 单元测试（纯逻辑模块）
-npm run pack        # 构建 + electron-builder，产物在 release/win-unpacked 和 release/*.zip
-npm run release     # typecheck + test + pack + 把绿色版、源码、完整 Git 开发包和 SHA256 清单复制到上级目录
+需要 Node.js ≥22.12.0，建议 Node.js 24。`setup` 按锁文件安装依赖并校验 Electron 下载。
+
+```powershell
+npm run typecheck
+npm test
+npm run build
+npm run pack
 ```
 
-### 验收脚本
+欢迎提交 [问题与建议](https://github.com/1127075982ak47-dev/asset3d-previewer/issues) 或 Pull Request。
+开发流程见 [贡献指南](CONTRIBUTING.md)，换机开发见 [交接说明](HANDOFF.md)，安全报告见 [SECURITY.md](SECURITY.md)。
+公开开发分支 `main` 包含最新文档与演示；Release 源码附件对应正式版本。
 
-都用真实素材或合成夹具跑，不用 mock：
+## 验证与文档
 
-```bash
-node scripts/make-fixtures.mjs                          # 生成合成夹具到 .fixtures/（TGA/DDS/点云/缺依赖/重复文件/BVH/材质变体）
-npx electron scripts/verify-render.cjs "D:\素材目录"    # 离屏出图，逐张分析像素，识别空白/纯色（VERIFY_LIMIT=20 控制张数）
-npx electron scripts/verify-ui.cjs "D:\素材目录"        # 真实主进程：扫描、出图、进查看器、拖拽旋转
-npx electron scripts/verify-viewer.cjs "D:\素材目录"    # 显示模式/贴图通道/HDRI/曝光/剖切/测量/导航球/对比/设为缩略图，逐步截图并收集报错
-npx electron scripts/verify-library.cjs                 # 列表视图/评分/颜色/重命名/固定/重复查找/回收站/主题/对比（用夹具的临时拷贝）
-npx electron scripts/verify-drag.cjs "D:\素材目录"      # 多选与拖出的文件列表
-npx electron scripts/verify-soak.cjs "D:\大素材目录"    # 压力：上千个模型滚动到底再回顶，可见优先出图
-node scripts/verify-blend.mjs "D:\blend目录"            # .blend 内嵌图解析（含 Blender 5 新格式）
-```
+- **104 项单元测试**，以及实际查看器、资源库、文件故障和 EXE 检查。
+- GitHub Windows CI 自动执行类型检查、单元测试和构建。
+- 版本标签自动构建绿色版；正式下载包由维护者验证后发布。
 
-注意 `verify-drag` 会先把应用自己的 `drag:start` 处理器摘掉再测 —— `webContents.startDrag()`
-在 Windows 上会进入系统级模态拖拽循环，脚本发的合成事件没有真实鼠标手势，
-那个循环永远等不到结束，主进程会直接卡死。
+[快速使用](docs/QUICKSTART.txt) · [完整功能与技术说明](docs/USER_GUIDE.md) · [更新日志](CHANGELOG.md) · [验收范围](docs/RELEASE_VALIDATION.md) · [演示素材说明](docs/SHOWCASE.md)
 
-## 架构
+## 致谢与第三方代码
 
-```
-main 进程 (Node)
-├─ argv.ts           启动参数解析（--folder / 位置参数）
-├─ scanner.ts        递归扫描 + 伴生文件抑制 + 进度/取消
-├─ cache.ts          便携路径 + 缩略图缓存 + 淘汰
-├─ pathPolicy.ts     asset3d:// 路径策略（越权判断、UNC、贴图兜底），纯逻辑
-├─ protocol.ts       asset3d:// 协议处理
-├─ blendThumb.ts     .blend 内嵌预览图提取（纯 JS，2.8–5.x）
-├─ blenderService.ts Blender 探测 / 版本匹配 / 批量转 GLB / 导入打开
-├─ jobQueue.ts       出图任务优先级队列（可见优先），纯逻辑
-├─ thumbnailer.ts    worker 池、崩溃恢复、GLB 导出、自定义缩略图
-├─ fileOps.ts        重命名 / 移动（带伴生文件），纯逻辑
-├─ dupes.ts          重复文件查找（大小分组 + 流式哈希），纯逻辑
-├─ hdri.ts           HDRI 环境贴图管理
-├─ library.ts        收藏 / 标签 / 评分 / 颜色，改名后跟随
-├─ menu.ts / log.ts / settings.ts / windowState.ts
+这个项目使用了以下优秀的开源组件。它们保留各自的版权和许可，感谢原作者与贡献者。
 
-shared/
-├─ filters.ts        网格筛选与排序，纯逻辑
-├─ csv.ts            清单导出
-├─ labels.ts         颜色标签与评分校验
-└─ formats.ts / types.ts
+| 组件 | 在项目中的用途 | 许可 |
+|---|---|---|
+| [Electron](https://github.com/electron/electron) | 桌面运行环境与窗口 | MIT；Chromium 等随附组件采用各自许可 |
+| [React](https://github.com/facebook/react) | 中文界面与交互 | MIT |
+| [three.js](https://github.com/mrdoob/three.js) | 3D 渲染、相机、加载器、后处理与导出器 | MIT |
+| [DRACO](https://github.com/google/draco) | 压缩几何解码 | Apache-2.0 |
+| [Basis Universal](https://github.com/BinomialLLC/basis_universal) | KTX2 / Basis 压缩纹理解码 | Apache-2.0 |
+| [rhino3dm](https://github.com/mcneel/rhino3dm) | Rhino 3DM 解码 | MIT |
+| [pngjs](https://github.com/pngjs/pngjs) | PNG 编解码 | MIT |
+| [fzstd](https://github.com/101arrowz/fzstd) / [fflate](https://github.com/101arrowz/fflate) | zstd 与 ZIP 解压 | MIT |
+| [Vite](https://github.com/vitejs/vite) / [electron-vite](https://github.com/alex8088/electron-vite) | 开发与构建 | MIT |
+| [electron-builder](https://github.com/electron-userland/electron-builder) | Windows 打包 | MIT |
+| [TypeScript](https://github.com/microsoft/TypeScript) / [Vitest](https://github.com/vitest-dev/vitest) | 类型检查与测试 | Apache-2.0 / MIT |
 
-隐藏的 worker BrowserWindow ×N
-└─ three.js 离屏渲染 → PNG / GLTFExporter → GLB
+**素材来源**：内置 HDRI 来自 [Poly Haven](https://polyhaven.com/license)，示例录屏中的模型来自 [Kenney Nature Kit](https://kenney.nl/assets/nature-kit)，均采用 CC0。示例模型不随程序分发。
 
-主窗口 (React)
-├─ App.tsx           工具栏、筛选、选择、右键菜单、文件操作、导出
-├─ Grid.tsx / ListView.tsx   虚拟化网格 / 列表 + 视口优先出图
-├─ Sidebar.tsx       资源库（固定文件夹）+ 文件夹树
-├─ Viewer.tsx        查看器（React 层，含对比模式）
-├─ ViewerPanel.tsx   查看器右侧面板
-├─ lib/viewerEngine.ts  查看器 three.js 引擎（显示模式、HDRI、AO、阴影、相机、动画、剖切、测量、辅助）
-├─ lib/shading.ts    显示模式与贴图通道着色器
-└─ lib/measure.ts    两点测量
-```
+**演示制作**：真实软件录屏由 [HyperFrames](https://github.com/heygen-com/hyperframes) 编排，使用 [GSAP](https://gsap.com/standard-license/) 动效和 [FFmpeg](https://ffmpeg.org/) 编码；讲解为本机 Windows 中文语音合成。制作工具不随软件发布。
 
-几个关键设计：
-
-**缩略图在隐藏的 BrowserWindow 里渲染，而不是在 Node 里。**
-Node 侧做 WebGL 需要 `headless-gl` 这类原生模块，编译麻烦且会拖累绿色打包。
-隐藏窗口里是真实 WebGL 上下文，而且跑的是和详情查看器完全相同的代码路径，
-缩略图和放大后看到的效果天然一致。GPU 进程崩了会自动重建窗口。
-
-**自定义 `asset3d://` 协议承载本地文件。**
-注册成 standard scheme 后，three.js 按字符串拼接解析相对路径的行为可以直接
-复用。同时只放行用户主动打开过的目录，挡住 `../../../Windows/System32/...` 这类越权读取。
-
-**ASCII FBX 先规整缩进再解析。**
-three.js 的 FBX 文本解析器按每行 tab 数判断层级，Kenney 等素材包的导出器
-把数组闭合括号多缩进了一层，结果整包 FBX 全部解析失败。加载前按花括号层级
-重建一遍缩进，对规整文件是等价变换。
-
-**老式材质统一转成 PBR。**
-three.js 里只有 PBR 材质吃 `scene.environment`，`MeshPhongMaterial` 收不到
-环境光照。不转的话同一个模型的 glTF 版明亮通透、FBX 版却发灰发暗。
-
-**等贴图真正就位再渲染。**
-`FBXLoader` 等是 `TextureLoader.load()` 发出去就不管 —— `loadAsync` 返回时
-`texture.image` 往往还是 `undefined`，此时渲染会得到一张空贴图，模型全黑。
-用带完成信号的 `LoadingManager` 等齐，同时在 manager 上注册 TGA / DDS 解码器。
-
-**显示模式只换引用，不改原材质。**
-白膜 / 法线 / 贴图通道等都是把 mesh 上的材质引用换成共享材质或克隆体，切回「材质」时把原引用放回去；
-剖切平面也只挂在当前生效的这批材质上，网格与阴影不受影响。
-
-**缓存包含位置和依赖修订。**
-不同目录的同名模型不会串图。外部贴图、bin、MTL 等修改后自动生成新缓存；
-重命名仍可迁移已有缩略图。换盘符后的缓存可以重建，收藏与标签独立保存。
-
-## v1.3 数据与文件整理
-
-设置 → 缓存与系统 → 备份资源库 / 导入备份。备份包含收藏、标签、评分和颜色，
-导入与当前记录合并。设置、资源库和窗口状态采用原子保存，并保留上一版 `.bak`。
-
-原格式导出与移动携带已识别依赖，使用复制校验与同名冲突检查；移动只删除源模型，
-共享贴图、bin、mtl 等仍保留在源目录。重命名不改变内部引用的依赖名称。
-引用父目录的资源应导出 GLB，或整体复制素材文件夹。
-非标准引用及部分私有格式的外部依赖无法完整识别，请使用资源管理器整体复制。
-批量回收站操作只移除实际成功的完整路径记录，失败的文件和资源库记录保留。
-
-主窗口与 worker 都启用隔离沙箱，worker 不具备文件整理 API。
-本地文件协议核对真实路径，阻止目录链接越出已打开的资源范围。
-
-升级时先关闭程序，将旧 `data` 文件夹复制到新版 exe 同级，再启动新版。
-资源库记录使用绝对路径；素材位置相同时可以直接沿用，换位置后旧路径不会自动关联。
-旧缩略图在 v1.3 会自动重建，无需删除收藏。
-
-开发交接见 `HANDOFF.md`；快速使用见 `docs/QUICKSTART.txt`；本轮验收见 `docs/RELEASE_VALIDATION.md`。
-
-## 参与项目
-
-欢迎提交问题、最小复现样例、格式兼容改进和 Pull Request。开发流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，社区约定见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，安全问题见 [SECURITY.md](SECURITY.md)。
-
-项目本体保持免费、中文、本地离线，不加入收费、会员、账号或遥测。
-
-## 许可与致谢
-
-- 项目采用 [MIT 许可](LICENSE)。
-- 内置 HDRI 来自 [Poly Haven](https://polyhaven.com)，采用 CC0。
-- 截图中的示例模型来自 [Kenney Nature Kit](https://kenney.nl/assets/nature-kit)，采用 CC0；示例模型不随程序分发。
-- Electron、React、three.js、DRACO、Basis Universal、rhino3dm 等组件保留各自许可，见 [第三方许可说明](docs/THIRD_PARTY_NOTICES.txt)。
-
-GitHub 公开历史经过整理，本机路径、内部会话笔记、测试输出和私人提交邮箱已清理。
+项目代码采用 **[MIT 许可](LICENSE)**。许可全文与素材说明见 [第三方许可说明](docs/THIRD_PARTY_NOTICES.txt) 和 [素材许可](docs/ASSET_LICENSES.md)。
