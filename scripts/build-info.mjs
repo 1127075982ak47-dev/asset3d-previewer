@@ -1,14 +1,22 @@
 /** 将运行源码指纹写入包内，发布时拒绝同版本旧构建。文档更新不改变指纹。 */
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export function sourceFingerprint() {
-  const files = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT }).toString('utf8').split('\0')
-    .filter(n => /^(src\/|resources\/|build\/|package(?:-lock)?\.json$|electron(?:-builder\.yml|\.vite\.config\.ts)$)/.test(n)).sort()
+  const files = []
+  function walk(relative) {
+    for (const item of fs.readdirSync(path.join(ROOT, relative), { withFileTypes: true })) {
+      const name = path.posix.join(relative, item.name)
+      if (item.isDirectory()) walk(name)
+      else if (item.isFile()) files.push(name)
+    }
+  }
+  for (const dir of ['src', 'resources', 'build']) walk(dir)
+  files.push('package.json', 'package-lock.json', 'electron-builder.yml', 'electron.vite.config.ts')
+  files.sort()
   if (!files.length) throw new Error('无法读取运行源码清单')
   const hash = createHash('sha256')
   for (const name of files) {
