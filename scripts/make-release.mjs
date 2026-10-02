@@ -5,6 +5,8 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { unzipSync, zipSync } from 'three/examples/jsm/libs/fflate.module.js'
+import asar from '@electron/asar'
+import { sourceFingerprint } from './build-info.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
@@ -18,6 +20,11 @@ if (committed.version !== version) throw new Error('提交中的版本与工作�
 const appName = `${product}-v${version}-win64-绿色版.zip`
 const appZip = path.join(ROOT, 'release', appName)
 if (!fs.existsSync(appZip)) throw new Error(`缺少对应版本的绿色包，请先运行 npm run pack：${appName}`)
+const packedAsar = path.join(ROOT, 'release/win-unpacked/resources/app.asar')
+const build = JSON.parse(asar.extractFile(packedAsar, 'out/build-info.json').toString('utf8'))
+if (build.version !== version || build.sourceSha256 !== sourceFingerprint()) throw new Error('程序包与当前运行源码不同，请重新 npm run pack')
+const zippedAsar = Object.entries(unzipSync(fs.readFileSync(appZip), { filter: file => file.name.endsWith('resources/app.asar') }))
+if (zippedAsar.length !== 1 || createHash('sha256').update(zippedAsar[0][1]).digest('hex') !== createHash('sha256').update(fs.readFileSync(packedAsar)).digest('hex')) throw new Error('绿色 ZIP 与当前 EXE 构建不一致')
 const stage = fs.mkdtempSync(path.join(ROOT, '.verify-product-release-'))
 const outputs = [appName, `${product}-v${version}-源码工程.zip`, `${product}-v${version}-开发工程完整包（含git历史）.zip`]
 try {
@@ -55,7 +62,7 @@ try {
     for await (const chunk of fs.createReadStream(file)) hash.update(chunk)
     return hash.digest('hex')
   }
-  const manifest = { product, version, commit, createdAt: new Date().toISOString(), electron: pkg.devDependencies.electron, artifacts: [] }
+  const manifest = { product, version, commit, sourceSha256: build.sourceSha256, createdAt: new Date().toISOString(), electron: pkg.devDependencies.electron, artifacts: [] }
   for (const name of outputs) manifest.artifacts.push({ name, bytes: fs.statSync(path.join(dest, name)).size, sha256: await sha256(path.join(dest, name)) })
   fs.writeFileSync(path.join(dest, `${product}-v${version}-发布清单.json`), JSON.stringify(manifest, null, 2), 'utf8')
   console.log('三个发布包与 SHA256 清单已生成；旧版本保留。')
