@@ -1,8 +1,8 @@
 <div align="center">
   <img src="build/icon.png" width="80" alt="3D 资源预览器图标">
   <h1>3D 资源预览器</h1>
-  <p><strong>素材找得快，模型看得清。</strong></p>
-  <p>免费开源 · 中文界面 · Windows 绿色版 · 本地离线</p>
+  <p><strong>让 .blend、FBX、glTF 等模型，直接出现在素材墙里。</strong></p>
+  <p>Blender 文件预览 · 多格式缩略图 · 免费开源 · Windows 绿色版</p>
   <p>
     <a href="https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-win64-portable.zip"><strong>下载 Windows 绿色版</strong></a>
     &nbsp; · &nbsp;
@@ -17,16 +17,49 @@
   </p>
 </div>
 
-## 先看一段真实演示
+你的素材目录里，可能既有 **Blender `.blend` 工程**，也有 **FBX、OBJ、GLB / glTF** 模型。
+打开一个文件夹，就能在同一面素材墙里浏览这些文件的缩略图，先看清模型，再决定用哪一个。
 
-[![65 秒中文讲解：素材墙、显示模式、HDRI、剖切和 A/B 对比](docs/images/video-cover.png)](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)
+## 先看支持哪些格式
 
-**[观看 / 下载 65 秒中文讲解](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)** · 1080p / 30 fps · 软件实际录制
+| 资源类型 | 支持的格式 | 如何预览 |
+|---|---|---|
+| **Blender 工程** | **`.blend`** | 读取可用内嵌预览图；调用本机 Blender 自动生成模型缩略图与交互预览 |
+| **常用模型** | **FBX、GLB / glTF、OBJ、STL、PLY、DAE** | 内置加载器直接生成缩略图、进入三维查看 |
+| 其他模型与场景 | 3DS、3MF、WRL、VRM、USDZ、AMF、DRC、LWO、VOX、KMZ、MD2、PMX / PMD、3DM | 内置对应加载器 |
+| 点云、科学数据与动作 | PCD、VTK / VTP、XYZ、GCode、BVH | 按对应数据类型显示点、几何体、路径或骨骼 |
+| 识别并列出，暂不能预览 | MAX、MA / MB、C4D、SKP、ABC、USD、STEP、IGES 等 | 保留文件卡片，可整理或使用默认程序打开 |
 
-做这个工具的想法很简单：面对一大堆模型文件，能先看见它们，再决定用哪一个。
-它把日常浏览、预览、检查与整理放在一个窗口里，免费分享给喜欢三维创作的朋友。
+**27 种扩展名可通过内置加载器读取，另支持 Blender `.blend` 预览。**
+`.bin`、`.mtl`、贴图与常见导入元数据作为伴生文件隐藏，让素材墙集中显示模型。
+外部依赖与不同加载器的限制见 [完整使用说明](docs/USER_GUIDE.md)。
 
-*A free, open-source, offline 3D asset browser and viewer for Windows, built with Electron, React and three.js.*
+![真实软件演示：Blender、FBX、OBJ、GLB、STL、DAE 在同一素材目录生成缩略图](docs/images/formats.png)
+
+## 重点：Blender `.blend` 也能生成预览
+
+**内置 `.blend` 预览流程，自动转换默认开启。**
+程序会自动探测本机常见位置的 Blender 安装；绿色版或自定义位置可在设置中指定 `blender.exe`。
+
+| 你想做什么 | 软件如何处理 | 需要什么 |
+|---|---|---|
+| 快速浏览 `.blend` 缩略图 | 先提取文件保存时写入的可用内嵌图 | 文件含可用内嵌图；这一步无需运行 Blender |
+| 为 `.blend` 生成模型预览 | 后台调用 Blender 转为 GLB，再生成缩略图；原 `.blend` 文件保留 | 本机有能打开该文件的兼容版本 Blender |
+| 双击旋转、缩放与检查 | 查看转换后的模型，使用白膜、线框、HDRI、AO 等显示功能 | 同上；转换结果缓存，之后可复用 |
+
+![真实软件演示：筛选 Blender 文件，双击 .blend 进入三维交互预览](docs/images/blender.gif)
+
+> `.blend` 支持已集成在程序中，绿色版不捆绑 Blender 安装。
+> 没有可用内嵌图时，需要本机 Blender 生成预览；三维交互也需要 Blender。
+> 交互预览显示的是 GLB 导出结果，具体流程与兼容边界见 [Blender 说明](docs/USER_GUIDE.md#关于-blend)。
+
+## 再看一段真实演示
+
+[![中文讲解：先看多格式与 Blender 预览，再看显示模式、HDRI、剖切和 A/B 对比](docs/images/video-cover.png)](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)
+
+**[观看 / 下载 88 秒中文功能讲解](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)** · 1080p / 30 fps · 软件实际录制
+
+*A free, open-source, offline 3D asset browser for Windows: browse Blender .blend projects and mixed-format model libraries with thumbnail previews. Interactive .blend viewing uses a compatible local Blender installation.*
 
 ## 翻一翻素材墙
 
@@ -76,7 +109,7 @@
 | **[完整源码](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-source.zip)** | 查看与编译源码 | v1.3.0 公开源码与锁文件 |
 | **[完整开发工程（含 Git 历史）](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-developer-with-history.zip)** | 换电脑继续开发 | 源码、文档与经过整理的公开提交历史 |
 | [SHA256 校验清单](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-SHA256.json) | 校验下载文件 | 文件大小、公开提交与 SHA256 |
-| [65 秒中文功能演示](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4) | 先了解功能 | MP4，1080p / 30 fps，约 22 MB |
+| [中文功能演示](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4) | 先了解功能 | 约 88 秒，1080p / 30 fps，约 25 MB |
 
 1. 完整解压绿色版，运行 exe。
 2. 按 **Ctrl+O** 打开素材目录，双击缩略图查看模型。
@@ -87,16 +120,6 @@ Windows 10/11 x64。GPU 硬件加速默认开启，修改后需重启。
 
 > `.blend` 的 3D 交互需要兼容版本 Blender。MAX、C4D、SKP、STEP 等私有或 CAD 格式只列出，不能直接预览。
 > 目前发布包尚未代码签名；验证范围见 [验收报告](docs/RELEASE_VALIDATION.md)。
-
-## 支持哪些格式
-
-| 类别 | 格式 |
-|---|---|
-| 直接预览 | GLB / glTF、FBX、OBJ、STL、PLY、DAE、3DS、3MF、WRL、VRM、USDZ、AMF、PCD、VTK / VTP、DRC、XYZ、LWO、VOX、KMZ、MD2、PMX / PMD、3DM、GCode、BVH |
-| 通过 Blender | `.blend` 内嵌图；完整交互与 GLB 转换需要兼容版本 Blender |
-| 只列出 | MAX、MA / MB、C4D、SKP、ABC、USD、STEP、IGES 等私有或 CAD 格式 |
-
-`.bin`、`.mtl`、贴图和常见导入元数据作为伴生文件隐藏。外部依赖与非标准资源路径的限制见 [完整使用说明](docs/USER_GUIDE.md)。
 
 ## 开发与一起改进
 
@@ -134,6 +157,7 @@ npm run pack
 
 | 组件 | 在项目中的用途 | 许可 |
 |---|---|---|
+| [Blender](https://www.blender.org/)（外部程序） | `.blend` 文件转换，使用用户本机安装 | [GNU GPL](https://www.blender.org/about/license/)；绿色版不捆绑 Blender |
 | [Electron](https://github.com/electron/electron) | 桌面运行环境与窗口 | MIT；Chromium 等随附组件采用各自许可 |
 | [React](https://github.com/facebook/react) | 中文界面与交互 | MIT |
 | [three.js](https://github.com/mrdoob/three.js) | 3D 渲染、相机、加载器、后处理与导出器 | MIT |

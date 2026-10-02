@@ -2,13 +2,23 @@
 
 首个 GitHub 公开发布版本。免费、中文、本地离线，Windows 10/11 x64，解压即用。
 
+## 多格式素材预览，尤其是 Blender 文件
+
+**同一素材目录，浏览 `.blend`、FBX、OBJ、GLB / glTF、STL、PLY、DAE 等资源的缩略图。**
+内置加载器支持 27 种扩展名，完整格式表与实际动图见 [仓库首页](https://github.com/1127075982ak47-dev/asset3d-previewer#先看支持哪些格式)。
+
+- **`.blend` 自动转换默认开启**：先读取可用内嵌图，再调用本机 Blender 生成模型缩略图。
+- **双击 `.blend` 查看模型**：转换为 GLB 并缓存，可旋转、缩放和使用不同显示模式。
+- **自动探测 Blender**：常见安装位置自动识别，自定义位置可手动指定。
+- `.blend` 三维交互需要本机兼容版本 Blender，绿色版不捆绑 Blender；内嵌图读取无需启动它。
+
 ## 下载哪个附件
 
-- **win64-绿色版.zip**：普通用户下载，完整解压后运行 3D资源预览器.exe，约 153 MB。
-- **源码工程.zip**：当前公开提交源码，约 5 MB。
-- **开发工程完整包（含git历史）.zip**：继续开发使用，包含经过整理的公开 Git 历史。
-- **SHA256.json**：版本、公开提交、运行源码指纹、附件大小和 SHA256。
-- **demo-zh.mp4**：65 秒中文功能讲解，1080p / 30 fps，实际软件录制。
+- **Asset3D-Previewer-v1.3.0-win64-portable.zip**：普通用户下载，完整解压后运行 3D资源预览器.exe，约 153 MB。
+- **Asset3D-Previewer-v1.3.0-source.zip**：当前公开提交源码，约 5 MB。
+- **Asset3D-Previewer-v1.3.0-developer-with-history.zip**：继续开发使用，包含经过整理的公开 Git 历史。
+- **Asset3D-Previewer-v1.3.0-SHA256.json**：版本、公开提交、运行源码指纹、附件大小和 SHA256。
+- **Asset3D-Previewer-v1.3.0-demo-zh.mp4**：88 秒中文功能讲解，先讲多格式与 Blender 预览，1080p / 30 fps，实际软件录制。
 
 GitHub 自动生成的 Source code 附件仅包含源码；普通用户请选择绿色版。
 
@@ -39,7 +49,7 @@ GitHub 自动生成的 Source code 附件仅包含源码；普通用户请选择
 
 ## 直观看功能
 
-主页已提供真实录屏动图：素材浏览、显示模式切换、剖切和 A/B 对比。
+主页已提供真实录屏动图：混合格式素材浏览、`.blend` 三维预览、显示模式切换、剖切和 A/B 对比。
 [查看产品展示首页](https://github.com/1127075982ak47-dev/asset3d-previewer#readme)
 
 [观看 / 下载中文讲解视频](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/download/v1.3.0/Asset3D-Previewer-v1.3.0-demo-zh.mp4)
