@@ -9,6 +9,7 @@ const fs = require('node:fs')
 const { execFileSync } = require('node:child_process')
 
 const APP_ROOT = path.join(__dirname, '..')
+const USER_DATA = process.env.ASSET3D_DATA_DIR || path.join(APP_ROOT, '.dev-data')
 const DATA = path.join(APP_ROOT, '.verify-lib-data')
 const OUT = path.join(APP_ROOT, '.verify-lib')
 
@@ -37,8 +38,9 @@ app.whenReady().then(async () => {
     return
   }
   const errors = []
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2 && !/Electron Security Warning/.test(message)) errors.push(message)
+  win.webContents.on('console-message', event => {
+    const { level, message } = event
+    if ((level === 'warning' || level === 'error') && !/Electron Security Warning/.test(message)) errors.push(message)
   })
   const js = (code) => win.webContents.executeJavaScript(code, true)
   const shot = async (name) => {
@@ -95,7 +97,7 @@ app.whenReady().then(async () => {
   await sleep(500)
   const rated = await js(`document.querySelectorAll('.card .stars.has').length`)
   check('数字键评分', rated >= 1, `${rated} 张带评分`)
-  const lib = JSON.parse(fs.readFileSync(path.join(APP_ROOT, '.dev-data', 'library.json'), 'utf8'))
+  const lib = JSON.parse(fs.readFileSync(path.join(USER_DATA, 'library.json'), 'utf8'))
   check('评分落盘', Object.values(lib.ratings ?? {}).includes(4))
 
   await js(`document.querySelector('.card').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 400, clientY: 300 }))`)

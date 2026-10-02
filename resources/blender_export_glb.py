@@ -63,7 +63,7 @@ for job in jobs:
     src = job.get("in")
     dst = job.get("out")
     try:
-        bpy.ops.wm.open_mainfile(filepath=src)
+        bpy.ops.wm.open_mainfile(filepath=src, use_scripts=False)
         export_one(dst)
         if os.path.exists(dst):
             print("BATCH_OK\t%s" % src, flush=True)

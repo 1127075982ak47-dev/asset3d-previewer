@@ -48,7 +48,7 @@ export class JobQueue<T> {
 
     const keep: QueuedJob<T>[] = []
     const others: QueuedJob<T>[] = []
-    for (const j of this.items) (this.visible.has(j.id) ? keep : others).push(j)
+    for (const j of this.items) (this.visible.has(j.id) || j.priority < 0 ? keep : others).push(j)
     // 远的排后面，超出的部分退回
     others.sort((a, b) => a.priority - b.priority)
     const room = Math.max(0, this.cap - keep.length)
@@ -62,25 +62,26 @@ export class JobQueue<T> {
   }
 
   /** 取出当前最该做的一个 */
-  next(): QueuedJob<T> | undefined {
+  next(eligible: (j: QueuedJob<T>) => boolean = () => true): QueuedJob<T> | undefined {
     if (this.items.length === 0) return undefined
-    let bi = 0
-    let bs = this.score(this.items[0])
-    for (let i = 1; i < this.items.length; i++) {
+    let bi = -1
+    let bs = Infinity
+    for (let i = 0; i < this.items.length; i++) {
+      if (!eligible(this.items[i])) continue
       const s = this.score(this.items[i])
       if (s < bs) {
         bs = s
         bi = i
       }
     }
-    return this.items.splice(bi, 1)[0]
+    return bi >= 0 ? this.items.splice(bi, 1)[0] : undefined
   }
 
   /** 让所有排队中的任务失效并清空，返回被清掉的 */
-  bumpEpoch(): QueuedJob<T>[] {
+  bumpEpoch(keep: (j: QueuedJob<T>) => boolean = () => false): QueuedJob<T>[] {
     this.epoch++
-    const removed = this.items
-    this.items = []
+    const removed = this.items.filter(j => !keep(j))
+    this.items = this.items.filter(keep)
     return removed
   }
 

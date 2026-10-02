@@ -66,14 +66,14 @@ describe('companionsOf', () => {
 })
 
 describe('renameModel', () => {
-  it('改名并带上 .fbm', async () => {
+  it('改名保持 FBX 内部引用的原 .fbm 目录', async () => {
     const fbx = touch('d/old.fbx')
     touch('d/old.fbm/t.png')
     const r = await renameModel(fbx, 'new')
     expect(r.ok).toBe(true)
     expect(fs.existsSync(path.join(root, 'd/new.fbx'))).toBe(true)
-    expect(fs.existsSync(path.join(root, 'd/new.fbm/t.png'))).toBe(true)
-    expect(r.companions?.length).toBe(1)
+    expect(fs.existsSync(path.join(root, 'd/old.fbm/t.png'))).toBe(true)
+    expect(r.companions?.length).toBe(0)
   })
 
   it('目标已存在时拒绝', async () => {

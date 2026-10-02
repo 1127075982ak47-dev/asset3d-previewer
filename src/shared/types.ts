@@ -20,6 +20,8 @@ export interface ModelEntry {
   rel: string
   size: number
   mtimeMs: number
+  /** 主进程计算的源文件与外部资源版本，不信任渲染进程提供的值。 */
+  cacheRevision?: string
   /** .blend 需要 Blender 转换才能交互 */
   needsBlender: boolean
   /** false 表示只是识别出来是 3D 文件，本软件无法渲染它 */
@@ -261,6 +263,7 @@ export interface TrashResult {
   ok: boolean
   done: number
   failed: string[]
+  removedPaths: string[]
 }
 
 /* ---------------- 重复文件 ---------------- */

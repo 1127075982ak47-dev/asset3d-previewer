@@ -35,7 +35,8 @@ const HEADER = [
 ]
 
 export function csvEscape(v: unknown): string {
-  const s = v === undefined || v === null ? '' : String(v)
+  let s = v === undefined || v === null ? '' : String(v)
+  if (typeof v === 'string' && /^(?:[=+@]|-(?!\d))/.test(s.trimStart())) s = "'" + s
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 

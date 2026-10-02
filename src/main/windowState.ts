@@ -1,7 +1,7 @@
 import { screen, type BrowserWindow } from 'electron'
-import fs from 'node:fs'
 import path from 'node:path'
 import { cacheDir } from './cache'
+import { readJsonRecover, writeJsonAtomic } from './jsonStore'
 
 export interface WindowState {
   width: number
@@ -42,18 +42,15 @@ function isOnSomeDisplay(state: WindowState): boolean {
 }
 
 export function loadWindowState(): WindowState {
-  let saved: Partial<WindowState> = {}
-  try {
-    saved = JSON.parse(fs.readFileSync(file(), 'utf8'))
-  } catch {
-    return { ...DEFAULT_STATE }
-  }
+  const saved = readJsonRecover<Partial<WindowState>>(file(), () => ({})) ?? {}
+  const dimension = (value: unknown, fallback: number, min: number): number =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.min(7680, Math.max(min, Math.round(value))) : fallback
 
   const state: WindowState = {
-    width: Math.max(900, Math.round(saved.width ?? DEFAULT_STATE.width)),
-    height: Math.max(600, Math.round(saved.height ?? DEFAULT_STATE.height)),
-    x: typeof saved.x === 'number' ? Math.round(saved.x) : undefined,
-    y: typeof saved.y === 'number' ? Math.round(saved.y) : undefined,
+    width: dimension(saved.width, DEFAULT_STATE.width, 900),
+    height: dimension(saved.height, DEFAULT_STATE.height, 600),
+    x: typeof saved.x === 'number' && Number.isFinite(saved.x) ? Math.round(saved.x) : undefined,
+    y: typeof saved.y === 'number' && Number.isFinite(saved.y) ? Math.round(saved.y) : undefined,
     maximized: !!saved.maximized
   }
 
@@ -89,7 +86,7 @@ export function trackWindowState(win: BrowserWindow): void {
       maximized
     }
     try {
-      fs.writeFileSync(file(), JSON.stringify(state, null, 2), 'utf8')
+      writeJsonAtomic(file(), state)
     } catch {
       // 只读介质上跑绿色版时写不了，不该因此崩溃
     }

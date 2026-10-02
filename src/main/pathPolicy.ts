@@ -22,7 +22,11 @@ function norm(p: string): string {
 export function isWithin(root: string, target: string): boolean {
   const rel = path.relative(norm(root), norm(target))
   if (rel === '') return true
-  return !rel.startsWith('..') && !path.isAbsolute(rel)
+  return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)
+}
+
+export function isRealWithin(root: string, target: string): boolean {
+  try { return isWithin(fs.realpathSync(root), fs.realpathSync(target)) } catch { return false }
 }
 
 export class AccessPolicy {
@@ -35,8 +39,9 @@ export class AccessPolicy {
   }
 
   isAllowed(target: string): boolean {
-    for (const r of this.extraRoots()) if (isWithin(r, target)) return true
-    for (const r of this.roots) if (isWithin(r, target)) return true
+    const allowed = (r: string): boolean => isWithin(r, target) && (!fs.existsSync(target) || isRealWithin(r, target))
+    for (const r of this.extraRoots()) if (allowed(r)) return true
+    for (const r of this.roots) if (allowed(r)) return true
     return false
   }
 

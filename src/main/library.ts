@@ -3,6 +3,7 @@ import path from 'node:path'
 import { cacheDir } from './cache'
 import { clampRating, isColorLabel } from '../shared/labels'
 import type { LibraryPayload } from '../shared/types'
+import { readJsonRecover, writeJsonAtomic } from './jsonStore'
 
 /**
  * 收藏、标签、评分、颜色标签。
@@ -39,7 +40,7 @@ export function normalizeLibKey(p: string): string {
 }
 
 function cleanRecord<T>(raw: unknown, ok: (v: unknown) => v is T): Record<string, T> {
-  const out: Record<string, T> = {}
+  const out: Record<string, T> = Object.create(null)
   if (!raw || typeof raw !== 'object') return out
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
     if (ok(v)) out[k] = v
@@ -50,10 +51,10 @@ function cleanRecord<T>(raw: unknown, ok: (v: unknown) => v is T): Record<string
 export function getLibrary(): LibraryData {
   if (cached) return cached
   try {
-    const raw = JSON.parse(fs.readFileSync(file(), 'utf8')) as Partial<LibraryData>
+    const raw = readJsonRecover<Partial<LibraryData>>(file(), () => ({}))
     cached = {
       favorites: Array.isArray(raw.favorites) ? raw.favorites.filter((x) => typeof x === 'string') : [],
-      tags: cleanRecord(raw.tags, (v): v is string[] => Array.isArray(v)),
+      tags: cleanRecord(raw.tags, (v): v is string[] => Array.isArray(v) && v.every(t => typeof t === 'string')),
       ratings: cleanRecord(raw.ratings, (v): v is number => typeof v === 'number' && v >= 1 && v <= 5),
       colors: cleanRecord(raw.colors, (v): v is string => isColorLabel(v))
     }
@@ -66,10 +67,10 @@ export function getLibrary(): LibraryData {
 function persist(): void {
   if (!cached) return
   try {
-    fs.mkdirSync(path.dirname(file()), { recursive: true })
-    fs.writeFileSync(file(), JSON.stringify(cached, null, 2), 'utf8')
-  } catch {
-    // 只读介质上跑绿色版时写不了，不该因此崩溃
+    writeJsonAtomic(file(), cached)
+  } catch (err) {
+    cached = null
+    throw new Error(`资源库未能保存，请检查数据目录权限和剩余空间：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -82,6 +83,24 @@ export function libraryPayload(): LibraryPayload {
     colors: lib.colors,
     allTags: allTags()
   }
+}
+
+/** 导入资源库备份时合并有效记录；现有数据由原子保存保留上一版本。 */
+export function mergeLibraryBackup(value: unknown): LibraryPayload {
+  if (!value || typeof value !== 'object') throw new Error('备份文件不是有效的资源库')
+  const raw = value as Partial<LibraryData>
+  if (!Array.isArray(raw.favorites) || !raw.tags || typeof raw.tags !== 'object') throw new Error('备份缺少收藏或标签数据')
+  const next = getLibrary()
+  next.favorites = [...new Set([...next.favorites, ...raw.favorites.filter((v): v is string => typeof v === 'string' && path.isAbsolute(v)).map(normalizeLibKey)])]
+  for (const [target, source] of [
+    [next.tags, cleanRecord(raw.tags, (v): v is string[] => Array.isArray(v) && v.every(t => typeof t === 'string'))],
+    [next.ratings, cleanRecord(raw.ratings, (v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 5)],
+    [next.colors, cleanRecord(raw.colors, (v): v is string => isColorLabel(v))]
+  ] as [Record<string, unknown>, Record<string, unknown>][]) {
+    for (const [p, data] of Object.entries(source)) if (path.isAbsolute(p)) target[normalizeLibKey(p)] = data
+  }
+  persist()
+  return libraryPayload()
 }
 
 export function toggleFavorite(filePath: string): boolean {

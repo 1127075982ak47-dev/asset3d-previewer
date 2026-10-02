@@ -5,8 +5,10 @@ import { pathToFileURL } from 'node:url'
 import { cacheDir } from './cache'
 import { resolveHdriFile } from './hdri'
 import { log } from './log'
+import { rememberAssetFile } from './assetRevision'
 import {
   AccessPolicy,
+  isRealWithin,
   SCHEME,
   assetPathFromUrlRest,
   decodeSegments,
@@ -32,8 +34,7 @@ export function registerScheme(): void {
         secure: true,
         supportFetchAPI: true,
         stream: true,
-        corsEnabled: true,
-        bypassCSP: true
+        corsEnabled: true
       }
     }
   ])
@@ -81,8 +82,12 @@ function decoderRoot(): string {
   return cachedDecoderRoot
 }
 
-function fileResponse(p: string): Promise<Response> {
-  return net.fetch(pathToFileURL(p).toString())
+async function fileResponse(p: string): Promise<Response> {
+  await rememberAssetFile(p)
+  const response = await net.fetch(pathToFileURL(p).toString())
+  const headers = new Headers(response.headers)
+  headers.set('Cache-Control', 'no-store')
+  return new Response(response.body, { status: response.status, headers })
 }
 
 export function registerHandler(): void {
@@ -135,7 +140,7 @@ export function registerHandler(): void {
       if (host === 'decoder') {
         const root = decoderRoot()
         const target = path.normalize(path.join(root, decodeSegments(rest)))
-        if (!target.startsWith(root)) {
+        if (!isRealWithin(root, target)) {
           return new Response('forbidden', { status: 403 })
         }
         return await fileResponse(target)

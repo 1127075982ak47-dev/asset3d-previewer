@@ -17,6 +17,8 @@ import { convertBlendToGlb } from './blenderService'
 import { pathToAssetUrl, thumbUrl } from './protocol'
 import { JobQueue, type QueuedJob } from './jobQueue'
 import { log } from './log'
+import { prepareAsset } from './assetRevision'
+import { trustWorker } from './ipcGuard'
 import type {
   ModelEntry,
   ModelStats,
@@ -42,6 +44,7 @@ interface JobPayload {
   req: ThumbRequest
   resolve: (r: ThumbResult) => void
   resolveExport?: (r: ExportResult) => void
+  generation?: number
 }
 
 type Job = QueuedJob<JobPayload>
@@ -66,6 +69,13 @@ let jobSeq = 0
 const inflight = new Map<number, Job>()
 /** 同一个文件正在处理时，后来的请求挂到同一个 promise 上，不重复渲染 */
 const pending = new Map<string, Promise<ThumbResult>>()
+const generations = new Map<string, number>()
+const lastPrepared = new Map<string, ModelEntry>()
+async function prepared(entry: ModelEntry): Promise<ModelEntry> {
+  const value = await prepareAsset(entry)
+  lastPrepared.set(entry.path, value)
+  return value
+}
 
 let onProgress: ((r: ThumbResult) => void) | null = null
 /** 查看器打开时暂停出图：三个隐藏窗口全速出图会和查看器抢 GPU */
@@ -95,13 +105,19 @@ function spawnWindow(w: Worker): void {
     height: 640,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: ['--asset3d-worker'],
       // 隐藏窗口默认会被降频，关掉才能保持稳定出图速度
       backgroundThrottling: false,
       offscreen: false
     }
   })
   w.win = win
+  trustWorker(win.webContents)
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', e => e.preventDefault())
   w.ready = false
 
   // GPU 进程或渲染进程崩了不能等 60 秒超时，立刻判失败并重建
@@ -115,8 +131,8 @@ function spawnWindow(w: Worker): void {
     failBusy(w, '渲染进程无响应')
     recycle(w)
   })
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) log.warn('worker', `#${w.slot} ${message}`)
+  win.webContents.on('console-message', event => {
+    if (event.level === 'warning' || event.level === 'error') log.warn('worker', `#${w.slot} ${event.message}`)
   })
 
   const target = workerUrl()
@@ -164,7 +180,7 @@ export function workerCount(): number {
 
 /** 换文件夹时调用：让所有排队中的任务失效 */
 export function bumpEpoch(): void {
-  for (const j of queue.bumpEpoch()) j.payload.resolve({ id: j.id, state: 'pending' })
+  for (const j of queue.bumpEpoch(j => j.payload.kind === 'export')) j.payload.resolve({ id: j.id, state: 'pending' })
 }
 
 /** 网格上报当前可见的条目，让它们插队 */
@@ -218,6 +234,7 @@ ipcMain.on(
     }
   ) => {
     const w = workers.find((x) => !x.win.isDestroyed() && x.win.webContents.id === e.sender.id)
+    if (!w || w.jobId !== payload.jobId || !w.busy) return
     const job = inflight.get(payload.jobId)
     inflight.delete(payload.jobId)
     if (w) {
@@ -241,6 +258,11 @@ ipcMain.on(
         return
       }
 
+      if (job.payload.generation !== (generations.get(job.payload.key) ?? 0)) {
+        job.payload.resolve({ id: job.id, state: 'pending' })
+        pump()
+        return
+      }
       if (payload.ok && payload.png && payload.png.length > 0) {
         try {
           await writeThumb(job.payload.key, Buffer.from(payload.png))
@@ -273,20 +295,19 @@ ipcMain.on(
 
 function finish(job: Job, r: ThumbResult): void {
   job.payload.resolve(r)
-  onProgress?.(r)
+  if (job.epoch === queue.epoch) onProgress?.(r)
 }
 
 function pump(): void {
-  if (paused) return
   for (const w of workers) {
     if (!w.ready || w.busy || w.win.isDestroyed()) continue
 
     let job: Job | undefined
     // 跳过换文件夹后作废的任务
     for (;;) {
-      job = queue.next()
+      job = queue.next(j => !paused || j.payload.kind === 'export')
       if (!job) return
-      if (job.epoch === queue.epoch) break
+      if (job.payload.kind === 'export' || job.epoch === queue.epoch) break
       job.payload.resolve({ id: job.id, state: 'pending' })
     }
 
@@ -352,7 +373,7 @@ function enqueue(
       id: entry.id,
       priority: req.priority,
       epoch,
-      payload: { kind, key, entry, file, ext, req, resolve }
+      payload: { kind, key, entry, file, ext, req, resolve, generation: generations.get(key) ?? 0 }
     })
     pump()
   })
@@ -367,7 +388,9 @@ function keyOf(entry: ModelEntry, req: ThumbRequest): string {
  * 统计信息保留（模型没变），只换图。
  */
 export async function setCustomThumb(entry: ModelEntry, req: ThumbRequest, png: Buffer): Promise<ThumbResult> {
+  entry = await prepared(entry)
   const key = keyOf(entry, req)
+  generations.set(key, (generations.get(key) ?? 0) + 1)
   for (const j of queue.remove(entry.id)) j.payload.resolve({ id: j.id, state: 'pending' })
   await writeThumb(key, png)
   const stats = await readMeta<ModelStats>(key)
@@ -388,6 +411,8 @@ export async function migrateThumb(
   newEntry: ModelEntry,
   req: ThumbRequest
 ): Promise<ThumbResult | null> {
+  oldEntry = lastPrepared.get(oldEntry.path) ?? oldEntry
+  newEntry = await prepared(newEntry)
   const ok = await copyThumb(keyOf(oldEntry, req), keyOf(newEntry, req))
   if (!ok) return null
   const key = keyOf(newEntry, req)
@@ -396,7 +421,7 @@ export async function migrateThumb(
 }
 
 /** 把一个模型丢进出图队列（或直接命中缓存） */
-export function requestThumb(
+export async function requestThumb(
   entry: ModelEntry,
   req: ThumbRequest,
   blendAutoConvert: boolean,
@@ -405,12 +430,15 @@ export function requestThumb(
   if (!entry.previewable) {
     return Promise.resolve({ id: entry.id, state: 'unsupported' })
   }
-
+  const epoch = queue.epoch
+  try { entry = await prepared(entry) } catch (err) {
+    return { id: entry.id, state: 'failed', error: `文件无法读取：${String(err)}` }
+  }
+  if (epoch !== queue.epoch) return { id: entry.id, state: 'pending' }
   const key = keyOf(entry, req)
   const existing = pending.get(key)
   if (existing) return existing
 
-  const epoch = queue.epoch
   const p = (async (): Promise<ThumbResult> => {
     const cached = await readThumb(key)
     if (cached) {
@@ -441,6 +469,9 @@ export function requestThumb(
  * 1.0 只清了渲染进程的状态，下一次请求照样命中磁盘缓存，等于什么都没做。
  */
 export async function invalidateThumb(entry: ModelEntry, req: ThumbRequest): Promise<void> {
+  entry = await prepared(entry)
+  const key = keyOf(entry, req)
+  generations.set(key, (generations.get(key) ?? 0) + 1)
   for (const j of queue.remove(entry.id)) j.payload.resolve({ id: j.id, state: 'pending' })
   await deleteThumb(keyOf(entry, req))
   await deleteThumb(embeddedThumbKey(entry))
@@ -519,6 +550,7 @@ export async function resolveViewableUrl(
   entry: ModelEntry,
   blenderPath: string | null
 ): Promise<{ url: string; path: string; converted: boolean; error?: string }> {
+  entry = await prepared(entry)
   if (!entry.previewable) {
     return { url: '', path: '', converted: false, error: `${entry.ext} 格式无法预览` }
   }

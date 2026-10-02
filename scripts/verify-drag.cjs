@@ -50,8 +50,9 @@ app.whenReady().then(async () => {
   }
 
   const errors = []
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) errors.push(message)
+  win.webContents.on('console-message', event => {
+    const { level, message } = event
+    if ((level === 'warning' || level === 'error')) errors.push(message)
   })
 
   // 点完要等一帧让 React 重新渲染，否则读到的还是上一次的状态

@@ -12,6 +12,14 @@ files:
 
 asar: true
 
+extraFiles:
+  - from: docs/QUICKSTART.txt
+    to: 使用说明.txt
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: docs/THIRD_PARTY_NOTICES.txt
+    to: 第三方许可说明.txt
+
 extraResources:
   # DRACO / KTX2 解码器必须是磁盘上的真实文件，asar 里的文件无法被 fetch 直接读
   - from: node_modules/three/examples/jsm/libs/draco/

@@ -31,6 +31,7 @@ import {
   forget,
   getLibrary,
   libraryPayload,
+  mergeLibraryBackup,
   rekey,
   removeTagFrom,
   setColor,
@@ -58,6 +59,10 @@ import { findDuplicates } from './dupes'
 import { initLog, installGlobalHandlers, log, logDirectory } from './log'
 import { parseLaunchArgs } from './argv'
 import { installMenu } from './menu'
+import { handle, trustMain, rememberModels, forgetModels, pngBytes, isTrustedMainEvent, knownModelPaths } from './ipcGuard'
+import { assetFileChanged, clearAssetRevisions } from './assetRevision'
+import { transferModel } from './fileTransfer'
+import { writeJsonAtomic } from './jsonStore'
 import pkg from '../../package.json'
 import type {
   AppInfo,
@@ -152,10 +157,16 @@ function createMainWindow(): void {
     icon: app.isPackaged ? undefined : devIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
       backgroundThrottling: false
     }
   })
+
+  trustMain(mainWindow.webContents)
+  mainWindow.webContents.on('will-navigate', e => e.preventDefault())
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
 
   if (state.maximized) mainWindow.maximize()
   trackWindowState(mainWindow)
@@ -163,7 +174,7 @@ function createMainWindow(): void {
   mainWindow.on('ready-to-show', () => mainWindow?.show())
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -175,8 +186,8 @@ function createMainWindow(): void {
     }, 500)
   })
   mainWindow.webContents.on('unresponsive', () => log.warn('app', '主窗口无响应'))
-  mainWindow.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) log.warn('renderer', message)
+  mainWindow.webContents.on('console-message', event => {
+    if (event.level === 'warning' || event.level === 'error') log.warn('renderer', event.message)
   })
 
   // 1.0 的一个真实 bug：隐藏的 worker 窗口一直开着，window-all-closed 永远不触发，
@@ -256,13 +267,15 @@ function stopWatcher(): void {
 /** 目录有增删改就提示用户重新扫描，不自动打断 */
 function startWatcher(root: string): void {
   stopWatcher()
+  const watchStarted = Date.now()
   try {
-    watcher = fs.watch(root, { recursive: true }, (eventType) => {
-      // Windows 会把"读取文件更新了访问时间"也报成 change，出图本身就会触发一堆；
-      // 只认 rename（新增 / 删除 / 改名），这才是需要重新扫描的情况
-      if (eventType !== 'rename') return
-      if (watchTimer) clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => send('folder:changed', root), 800)
+    watcher = fs.watch(root, { recursive: true }, (eventType, filename) => {
+      void (async () => {
+        if (eventType !== 'rename' && filename && !(await assetFileChanged(path.join(root, filename.toString()), watchStarted))) return
+        clearAssetRevisions()
+        if (watchTimer) clearTimeout(watchTimer)
+        watchTimer = setTimeout(() => send('folder:changed', root), 800)
+      })().catch(e => log.debug('watch', '变动检查失败', e))
     })
     watcher.on('error', (e) => {
       log.debug('watch', '监视出错，停止', e)
@@ -276,36 +289,40 @@ function startWatcher(root: string): void {
 
 /* ------------------------------- IPC ------------------------------- */
 
-ipcMain.handle('dialog:selectFolder', async () => {
+handle('dialog:selectFolder', async () => {
   if (!mainWindow) return null
   const r = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
     title: '选择要预览的 3D 资源文件夹'
   })
   if (r.canceled || r.filePaths.length === 0) return null
+  allowRoot(r.filePaths[0])
   return r.filePaths[0]
 })
 
-ipcMain.handle('dialog:pickFolder', async (_e, title?: string) => {
+handle('dialog:pickFolder', async (_e, title?: string) => {
   if (!mainWindow) return null
   const r = await dialog.showOpenDialog(mainWindow, {
     title: title ?? '选择文件夹',
     properties: ['openDirectory', 'createDirectory']
   })
   if (r.canceled || r.filePaths.length === 0) return null
+  allowRoot(r.filePaths[0])
   return r.filePaths[0]
 })
 
 let scanToken = 0
 
-ipcMain.handle('scan:folder', async (_e, root: string, opts: ScanOptions): Promise<ScanResult> => {
+handle('scan:folder', async (_e, root: string, opts: ScanOptions): Promise<ScanResult> => {
   const token = ++scanToken
   // 每次换文件夹先清空旧队列，否则上一个目录的几百个任务会拖慢新目录首屏
   bumpEpoch()
   clearTextureCache()
-  allowRoot(root)
+  clearAssetRevisions()
   const s = getSettings()
   try {
+    if (!(await fsp.stat(root)).isDirectory()) throw new ScanError(`不是文件夹：${root}`)
+    allowRoot(root)
     const result = await scanFolder(
       root,
       { ...opts, includeUnsupported: s.showUnsupported },
@@ -320,6 +337,7 @@ ipcMain.handle('scan:folder', async (_e, root: string, opts: ScanOptions): Promi
       result.cancelled = true
       return result
     }
+    rememberModels(result.entries)
     pushRecentFolder(root)
     saveSettings({ lastFolder: root })
     refreshMenu()
@@ -333,12 +351,12 @@ ipcMain.handle('scan:folder', async (_e, root: string, opts: ScanOptions): Promi
   }
 })
 
-ipcMain.handle('scan:cancel', () => {
+handle('scan:cancel', () => {
   scanToken++
   return true
 })
 
-ipcMain.handle('scan:validateFolder', async (_e, root: string) => {
+handle('scan:validateFolder', async (_e, root: string) => {
   try {
     const st = await fsp.stat(root)
     return st.isDirectory()
@@ -347,52 +365,52 @@ ipcMain.handle('scan:validateFolder', async (_e, root: string) => {
   }
 })
 
-ipcMain.handle('thumb:request', async (_e, entry: ModelEntry, req: ThumbRequest) => {
+handle('thumb:request', async (_e, entry: ModelEntry, req: ThumbRequest) => {
   const s = getSettings()
   return await requestThumb(entry, req, s.blendAutoConvert, s.blenderPath)
 })
 
-ipcMain.handle('thumb:setVisible', (_e, ids: string[]) => {
+handle('thumb:setVisible', (_e, ids: string[]) => {
   setVisible(Array.isArray(ids) ? ids : [])
   return true
 })
 
-ipcMain.handle('thumb:invalidate', async (_e, entry: ModelEntry, req: ThumbRequest) => {
+handle('thumb:invalidate', async (_e, entry: ModelEntry, req: ThumbRequest) => {
   await invalidateThumb(entry, req)
   return true
 })
 
-ipcMain.handle('thumb:pause', (_e, p: boolean) => {
+handle('thumb:pause', (_e, p: boolean) => {
   setPaused(!!p)
   return true
 })
 
-ipcMain.handle('thumb:cancelPending', () => {
+handle('thumb:cancelPending', () => {
   bumpEpoch()
   return true
 })
 
-ipcMain.handle('model:viewableUrl', async (_e, entry: ModelEntry) => {
+handle('model:viewableUrl', async (_e, entry: ModelEntry) => {
   const s = getSettings()
   return await resolveViewableUrl(entry, s.blenderPath)
 })
 
-ipcMain.handle('model:dependencies', async (_e, filePath: string) => {
+handle('model:dependencies', async (_e, filePath: string) => {
   return await checkDependencies(filePath)
 })
 
-ipcMain.handle('shell:showItem', (_e, p: string) => {
+handle('shell:showItem', (_e, p: string) => {
   shell.showItemInFolder(p)
   return true
 })
 
-ipcMain.handle('shell:openPath', async (_e, p: string) => {
+handle('shell:openPath', async (_e, p: string) => {
   return await shell.openPath(p)
 })
 
-ipcMain.handle('settings:get', () => getSettings())
+handle('settings:get', () => getSettings())
 
-ipcMain.handle('settings:save', async (_e, patch: Partial<AppSettings>) => {
+handle('settings:save', async (_e, patch: Partial<AppSettings>) => {
   const prev = getSettings()
   const next = saveSettings(patch)
   if (next.concurrency !== prev.concurrency) createWorkers(next.concurrency)
@@ -402,7 +420,7 @@ ipcMain.handle('settings:save', async (_e, patch: Partial<AppSettings>) => {
   return next
 })
 
-ipcMain.handle('settings:recent', async () => {
+handle('settings:recent', async () => {
   const list = getRecentFolders()
   const out: { dir: string; exists: boolean }[] = []
   for (const dir of list) {
@@ -417,7 +435,7 @@ ipcMain.handle('settings:recent', async () => {
   return out
 })
 
-ipcMain.handle('settings:removeRecent', (_e, dir: string) => {
+handle('settings:removeRecent', (_e, dir: string) => {
   const list = removeRecentFolder(dir)
   refreshMenu()
   return list
@@ -428,7 +446,7 @@ ipcMain.handle('settings:removeRecent', (_e, dir: string) => {
  * 用渲染进程主动来取而不是主进程推送 —— did-finish-load 早于 React 挂载，
  * 推送过去时还没人监听，事件就丢了。
  */
-ipcMain.handle('app:initialFolder', () => {
+handle('app:initialFolder', () => {
   const fromArgs = parseLaunchArgs(process.argv, { isPackaged: app.isPackaged })
   if (fromArgs) return fromArgs
   // 没带参数时按设置打开上次的文件夹（目录还在才开）
@@ -443,7 +461,7 @@ ipcMain.handle('app:initialFolder', () => {
   return null
 })
 
-ipcMain.handle('app:info', (): AppInfo => ({
+handle('app:info', (): AppInfo => ({
   version: appVersion(),
   electron: process.versions.electron ?? '',
   chrome: process.versions.chrome ?? '',
@@ -453,72 +471,94 @@ ipcMain.handle('app:info', (): AppInfo => ({
   portable: isPortable()
 }))
 
-ipcMain.handle('app:openLogs', () => shell.openPath(logDirectory() ?? logsDir()))
-ipcMain.handle('app:openData', () => shell.openPath(cacheDir()))
+handle('app:openLogs', () => shell.openPath(logDirectory() ?? logsDir()))
+handle('app:openData', () => shell.openPath(cacheDir()))
 
-ipcMain.handle('blender:info', async () => {
+handle('blender:info', async () => {
   const s = getSettings()
   return await getBlenderInfo(s.blenderPath)
 })
 
-ipcMain.handle('blender:redetect', async (_e, userPath?: string | null) => {
+handle('blender:redetect', async (_e, userPath?: string | null) => {
   const s = getSettings()
   await detectBlender(userPath !== undefined ? userPath : s.blenderPath)
   return await getBlenderInfo(s.blenderPath)
 })
 
 /** 用检测到的 Blender 打开文件：.blend 直接打开，其它格式交给 Blender 的导入器 */
-ipcMain.handle('blender:open', async (_e, filePath: string) => {
+handle('blender:open', async (_e, filePath: string) => {
   const s = getSettings()
   return await openInBlender(filePath, s.blenderPath)
 })
 
 /* --------------------- 收藏与标签 --------------------- */
 
-ipcMain.handle('library:get', () => libraryPayload())
+handle('library:get', () => libraryPayload())
 
-ipcMain.handle('library:toggleFavorite', (_e, p: string) => toggleFavorite(p))
+handle('library:backup', async () => {
+  if (!mainWindow) return null
+  const r = await dialog.showSaveDialog(mainWindow, { title: '备份收藏、标签与评分', defaultPath: '3D资源库备份.json', filters: [{ name: '资源库备份', extensions: ['json'] }] })
+  if (r.canceled || !r.filePath) return null
+  writeJsonAtomic(r.filePath, libraryPayload())
+  return r.filePath
+})
 
-ipcMain.handle('library:setFavorites', (_e, paths: string[], value: boolean) => {
+handle('library:restore', async () => {
+  if (!mainWindow) return null
+  const r = await dialog.showOpenDialog(mainWindow, { title: '选择资源库备份（与当前记录合并）', properties: ['openFile'], filters: [{ name: '资源库备份', extensions: ['json'] }] })
+  if (r.canceled || !r.filePaths[0]) return null
+  if ((await fsp.stat(r.filePaths[0])).size > 16 * 1024 * 1024) throw new Error('资源库备份超过 16 MB')
+  const payload = mergeLibraryBackup(JSON.parse(await fsp.readFile(r.filePaths[0], 'utf8')))
+  send('library:changed', payload)
+  return true
+})
+
+handle('library:toggleFavorite', (_e, p: string) => toggleFavorite(p))
+
+handle('library:setFavorites', (_e, paths: string[], value: boolean) => {
   setFavorites(paths, value)
   return getLibrary().favorites
 })
 
-ipcMain.handle('library:addTag', (_e, paths: string[], tag: string) => {
+handle('library:addTag', (_e, paths: string[], tag: string) => {
   addTagTo(paths, tag)
   return libraryPayload()
 })
 
-ipcMain.handle('library:removeTag', (_e, paths: string[], tag: string) => {
+handle('library:removeTag', (_e, paths: string[], tag: string) => {
   removeTagFrom(paths, tag)
   return libraryPayload()
 })
 
-ipcMain.handle('library:setTags', (_e, p: string, tags: string[]) => {
+handle('library:setTags', (_e, p: string, tags: string[]) => {
   setTags(p, tags)
   return libraryPayload()
 })
 
-ipcMain.handle('library:setRating', (_e, paths: string[], rating: number) => {
+handle('library:setRating', (_e, paths: string[], rating: number) => {
   setRating(paths, rating)
   return libraryPayload()
 })
 
-ipcMain.handle('library:setColor', (_e, paths: string[], color: string | null) => {
+handle('library:setColor', (_e, paths: string[], color: string | null) => {
   setColor(paths, color)
   return libraryPayload()
 })
 
 /* --------------------- 文件操作 --------------------- */
 
-ipcMain.handle(
+handle(
   'fs:rename',
   async (_e, entry: ModelEntry, newName: string, root: string, req: ThumbRequest): Promise<RenameResult> => {
     const r = await renameModel(entry.path, newName)
     if (!r.ok || !r.newPath) return { ok: false, error: r.error ?? '改名失败' }
     if (r.newPath === entry.path) return { ok: true, entry, companions: [] }
-    rekey(entry.path, r.newPath)
+    try { rekey(entry.path, r.newPath) } catch (err) {
+      send('app:notice', `文件已改名，但资源库记录未保存：${String(err)}`)
+    }
     const next = relocateEntry(entry, r.newPath, root)
+    forgetModels([entry.path])
+    rememberModels([next])
     // 缓存键含文件名，搬一份过去免得重新出图；搬不了就让界面重新请求
     const migrated = await migrateThumb(entry, next, req)
     log.info('fs', `改名 ${entry.rel} -> ${next.rel}`)
@@ -526,10 +566,16 @@ ipcMain.handle(
   }
 )
 
-ipcMain.handle('fs:move', async (_e, entries: ModelEntry[], destDir: string): Promise<MoveResult> => {
+handle('fs:move', async (_e, entries: ModelEntry[], destDir: string): Promise<MoveResult> => {
   try {
     const r = await moveModels(entries.map((e) => e.path), destDir)
-    for (const m of r.moved) rekey(m.from, m.to)
+    for (const m of r.moved) {
+      try { rekey(m.from, m.to) } catch (err) {
+        send('app:notice', `文件已移动，但资源库记录未保存：${String(err)}`)
+      }
+      forgetModels([m.from])
+    }
+    allowRoot(destDir)
     log.info('fs', `移动到 ${destDir}: ${r.moved.length} 成功 / ${r.failed.length} 失败`)
     return { ok: r.failed.length === 0, moved: r.moved.length, failed: r.failed, dir: destDir }
   } catch (e) {
@@ -538,27 +584,32 @@ ipcMain.handle('fs:move', async (_e, entries: ModelEntry[], destDir: string): Pr
 })
 
 /** 删除到回收站（可在资源管理器里找回），不做永久删除 */
-ipcMain.handle('fs:trash', async (_e, paths: string[]): Promise<TrashResult> => {
+handle('fs:trash', async (_e, paths: string[]): Promise<TrashResult> => {
   let done = 0
   const failed: string[] = []
+  const removedPaths: string[] = []
   for (const p of paths) {
     try {
       await shell.trashItem(p)
       done++
+      removedPaths.push(p)
     } catch (e) {
       failed.push(`${path.basename(p)}: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  forget(paths)
+  try { forget(removedPaths) } catch (err) {
+    send('app:notice', `文件已进入回收站，但资源库记录未保存：${String(err)}`)
+  }
+  forgetModels(removedPaths)
   log.info('fs', `回收站: ${done} 成功 / ${failed.length} 失败`)
-  return { ok: failed.length === 0, done, failed }
+  return { ok: failed.length === 0, done, failed, removedPaths }
 })
 
 /* --------------------- 重复文件 --------------------- */
 
 let dupeToken = 0
 
-ipcMain.handle('dupes:find', async (_e, files: { path: string; size: number }[]): Promise<DupeResult> => {
+handle('dupes:find', async (_e, files: { path: string; size: number }[]): Promise<DupeResult> => {
   const token = ++dupeToken
   const r = await findDuplicates(files, {
     onProgress: (p) => {
@@ -570,19 +621,18 @@ ipcMain.handle('dupes:find', async (_e, files: { path: string; size: number }[])
   return r
 })
 
-ipcMain.handle('dupes:cancel', () => {
+handle('dupes:cancel', () => {
   dupeToken++
   return true
 })
 
 /** 查看器当前视角写成缩略图 */
-ipcMain.handle('thumb:setCustom', async (_e, entry: ModelEntry, req: ThumbRequest, dataUrl: string) => {
-  const b64 = dataUrl.replace(/^data:image\/png;base64,/, '')
-  return await setCustomThumb(entry, req, Buffer.from(b64, 'base64'))
+handle('thumb:setCustom', async (_e, entry: ModelEntry, req: ThumbRequest, dataUrl: string) => {
+  return await setCustomThumb(entry, req, pngBytes(dataUrl))
 })
 
 /** 保存文本文件（CSV 清单等） */
-ipcMain.handle(
+handle(
   'export:text',
   async (_e, suggestedName: string, content: string, filterName: string, ext: string) => {
     if (!mainWindow) return null
@@ -598,7 +648,7 @@ ipcMain.handle(
 )
 
 /** 转盘序列：选个目录，把每一帧写成 name_01.png … */
-ipcMain.handle('export:frames', async (_e, dirTitle: string, baseName: string, frames: string[]) => {
+handle('export:frames', async (_e, dirTitle: string, baseName: string, frames: string[]) => {
   if (!mainWindow) return { ok: false, error: '无窗口' }
   const r = await dialog.showOpenDialog(mainWindow, {
     title: dirTitle,
@@ -650,7 +700,7 @@ async function toGlbFile(
  * 把选中的模型批量导出到一个目录。
  * 「选目录」和「执行」拆开：界面走对话框，验收脚本直接调这个。
  */
-ipcMain.handle(
+handle(
   'export:batchTo',
   async (
     _e,
@@ -682,7 +732,7 @@ ipcMain.handle(
           }
         } else {
           const dest = uniqueDest(destDir, entry.name, entry.ext)
-          await fsp.copyFile(entry.path, dest)
+          await transferModel(entry.path, dest, false)
           done++
         }
       } catch (err) {
@@ -692,12 +742,12 @@ ipcMain.handle(
     }
 
     log.info('export', `导出到 ${destDir}: 成功 ${done} / ${entries.length}`)
-    return { ok: true, dir: destDir, done, total: entries.length, failed }
+    return { ok: failed.length === 0, dir: destDir, done, total: entries.length, failed }
   }
 )
 
 /** 保存渲染进程合成好的接触表 PNG */
-ipcMain.handle('export:contactSheet', async (_e, dataUrl: string, name: string) => {
+handle('export:contactSheet', async (_e, dataUrl: string, name: string) => {
   if (!mainWindow) return null
   const r = await dialog.showSaveDialog(mainWindow, {
     title: '导出接触表',
@@ -710,12 +760,12 @@ ipcMain.handle('export:contactSheet', async (_e, dataUrl: string, name: string) 
   return r.filePath
 })
 
-ipcMain.handle('cache:info', async () => {
+handle('cache:info', async () => {
   const stats = await cacheStats()
   return { dir: cacheDir(), ...stats }
 })
 
-ipcMain.handle('cache:clear', async () => {
+handle('cache:clear', async () => {
   await clearCache()
   log.info('cache', '已清空缓存')
   return true
@@ -759,7 +809,13 @@ function getFallbackDragIcon(): Electron.NativeImage {
 ipcMain.on(
   'drag:start',
   (e, payload: { paths: string[]; thumbKey?: string | null }) => {
-    const files = (payload.paths ?? []).filter((p) => {
+    if (!isTrustedMainEvent(e)) return
+    let paths: string[]
+    try { paths = knownModelPaths(payload?.paths) } catch (err) {
+      log.warn('drag', '拒绝无效的拖出请求', err)
+      return
+    }
+    const files = paths.filter((p) => {
       try {
         return fs.statSync(p).isFile()
       } catch {
@@ -784,17 +840,17 @@ ipcMain.on(
   }
 )
 
-ipcMain.handle('app:decoderUrl', (_e, sub: string) => decoderUrl(sub))
+handle('app:decoderUrl', (_e, sub: string) => decoderUrl(sub))
 
 /* --------------------- HDRI 环境光 --------------------- */
 
-ipcMain.handle('hdri:list', () => listHdri())
-ipcMain.handle('hdri:import', () => importHdri(mainWindow))
-ipcMain.handle('hdri:remove', (_e, id: string) => removeHdri(id))
-ipcMain.handle('hdri:openDir', () => shell.openPath(userHdriDir()))
+handle('hdri:list', () => listHdri())
+handle('hdri:import', () => importHdri(mainWindow))
+handle('hdri:remove', (_e, id: string) => removeHdri(id))
+handle('hdri:openDir', () => shell.openPath(userHdriDir()))
 
 /** 导出当前视角截图 */
-ipcMain.handle(
+handle(
   'export:png',
   async (_e, suggestedName: string, dataUrl: string) => {
     if (!mainWindow) return null
@@ -811,7 +867,7 @@ ipcMain.handle(
 )
 
 /** 把单个模型另存为 GLB：.blend 用 Blender 转换结果，其它格式用 three.js 导出 */
-ipcMain.handle('export:glb', async (_e, entry: ModelEntry) => {
+handle('export:glb', async (_e, entry: ModelEntry) => {
   if (!mainWindow) return null
   const s = getSettings()
 

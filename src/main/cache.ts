@@ -4,6 +4,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { sha1 } from './util'
 import type { LightingPreset, ThumbAngle, ThumbBackground, ThumbShading } from '../shared/types'
+import { randomUUID } from 'node:crypto'
+import { writeJsonAtomic } from './jsonStore'
 
 export { sha1 }
 
@@ -11,9 +13,9 @@ export { sha1 }
  * 渲染配方版本号。改动出图逻辑（光照/构图/尺寸/贴图解码）时 +1，
  * 让所有旧缓存自动失效，不用手动清缓存。
  *
- * v5：ASCII FBX 缩进修复、TGA/DDS 贴图、空白检测、缓存键去掉绝对路径。
+ * v6：缓存包含资源位置及依赖修订，避免同名模型串图和外部材质更新后旧图。
  */
-export const RENDER_VERSION = 5
+export const RENDER_VERSION = 6
 
 let cacheRoot: string | null = null
 let portable = false
@@ -43,6 +45,12 @@ function isWritable(dir: string): boolean {
  * 退回系统默认位置，保证程序照常能用。
  */
 export function initPortablePaths(): void {
+  const override = process.env['ASSET3D_DATA_DIR']
+  if (override && path.isAbsolute(override) && isWritable(override)) {
+    app.setPath('userData', override)
+    app.setPath('sessionData', override)
+    return
+  }
   if (!app.isPackaged) {
     // 以构建产物位置（out/main）为基准回推项目根，而不是用 app.getAppPath()——
     // 后者返回入口脚本所在目录，用不同方式启动会落到不同地方
@@ -61,7 +69,7 @@ export function initCache(): { dir: string; portable: boolean } {
   if (cacheRoot) return { dir: cacheRoot, portable }
 
   const userData = app.getPath('userData')
-  cacheRoot = isWritable(userData) ? userData : app.getPath('temp')
+  cacheRoot = isWritable(userData) ? userData : path.join(app.getPath('temp'), 'asset3d-preview-data')
   // 目录落在 exe 同级就说明重定向成功了
   portable = path
     .resolve(cacheRoot)
@@ -91,17 +99,12 @@ export interface FileIdentity {
   path: string
   mtimeMs: number
   size: number
+  cacheRevision?: string
 }
 
-/**
- * 文件身份：文件名 + 大小 + 修改时间，不含所在目录。
- *
- * 1.0 把绝对路径也放进键里，结果"绿色版拷到别的机器/换个盘符"缓存就全部失效，
- * 和 README 承诺的可移植性矛盾。去掉路径之后同一个文件的多份副本还能共享一次渲染。
- * 同名同大小同 mtime 却内容不同的文件几乎不存在，就算撞上也只是缩略图张冠李戴。
- */
+/** 资源路径、源文件版本和依赖修订共同标识缓存；搬迁后的缓存可重建。 */
 function identity(f: FileIdentity): string {
-  return `${path.basename(f.path).toLowerCase()}|${Math.round(f.mtimeMs)}|${f.size}`
+  return `${path.resolve(f.path).toLowerCase()}|${f.mtimeMs}|${f.size}|${f.cacheRevision ?? ''}`
 }
 
 /**
@@ -165,7 +168,7 @@ export async function writeThumb(key: string, data: Buffer): Promise<string> {
   const p = thumbPathFor(key)
   await fsp.mkdir(path.dirname(p), { recursive: true })
   // 先写临时文件再 rename，避免进程被杀时留下半张损坏的 PNG
-  const tmp = `${p}.${process.pid}.tmp`
+  const tmp = `${p}.${randomUUID()}.tmp`
   await fsp.writeFile(tmp, data)
   await fsp.rename(tmp, p)
   return p
@@ -198,7 +201,7 @@ export async function writeMeta(key: string, data: unknown): Promise<void> {
   const p = metaPathFor(key)
   try {
     await fsp.mkdir(path.dirname(p), { recursive: true })
-    await fsp.writeFile(p, JSON.stringify(data), 'utf8')
+    writeJsonAtomic(p, data)
   } catch {
     /* 统计信息丢了不影响主流程 */
   }

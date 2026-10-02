@@ -164,6 +164,16 @@ export default function App(): JSX.Element {
     toastTimer.current = setTimeout(() => setToastRaw(null), kind === 'error' ? 5000 : 2600)
   }, [])
 
+  useEffect(() => window.api.onNotice(message => setToast(message, 'error')), [setToast])
+  useEffect(() => {
+    const rejected = (event: PromiseRejectionEvent): void => {
+      event.preventDefault()
+      setToast(event.reason instanceof Error ? event.reason.message : String(event.reason), 'error')
+    }
+    window.addEventListener('unhandledrejection', rejected)
+    return () => window.removeEventListener('unhandledrejection', rejected)
+  }, [setToast])
+
   const setFilter = useCallback((patch: Partial<FilterState>) => {
     setFilterRaw((f) => ({ ...f, ...patch }))
   }, [])
@@ -189,6 +199,7 @@ export default function App(): JSX.Element {
   const refreshLib = useCallback(async () => {
     setLib(toLib(await window.api.library()))
   }, [])
+  useEffect(() => window.api.onLibraryChanged(p => setLib(toLib(p))), [])
 
   const refreshRecent = useCallback(async () => {
     setRecent(await window.api.recentFolders())
@@ -645,7 +656,7 @@ export default function App(): JSX.Element {
         message: (
           <>
             把 {targets.length === 1 ? `「${targets[0].name}${targets[0].ext}」` : `这 ${targets.length} 个文件`}
-            移到回收站？可以在资源管理器的回收站里找回。
+            移到回收站？可以在资源管理器的回收站里找回。共享的 .bin、材质和贴图会保留。
           </>
         ),
         details: targets.length > 1 ? targets.map((e) => e.rel) : undefined,
@@ -654,11 +665,10 @@ export default function App(): JSX.Element {
         onConfirm: async () => {
           const r = await window.api.trashModels(targets.map((e) => e.path))
           setConfirm(null)
-          const goneIds = new Set(targets.map((e) => e.id))
+          const removed = new Set(r.removedPaths.map(p => p.toLowerCase()))
+          const goneIds = new Set(targets.filter(e => removed.has(e.path.toLowerCase())).map(e => e.id))
           if (r.failed.length > 0) {
             // 失败的留在列表里
-            const failedNames = new Set(r.failed.map((f) => f.split(':')[0]))
-            for (const e of targets) if (failedNames.has(`${e.name}${e.ext}`)) goneIds.delete(e.id)
             setToast(`${r.done} 个已删除，${r.failed.length} 个失败`, 'error')
           } else {
             setToast(`已把 ${r.done} 个文件移到回收站`)
@@ -684,7 +694,7 @@ export default function App(): JSX.Element {
             <br />
             <b className="wrap">{dir}</b>
             <br />
-            .gltf 的 .bin 与贴图、.obj 的 .mtl 与贴图、.fbx 的 .fbm 目录会一起搬走。同名文件不会覆盖。
+            依赖文件会一并复制，源目录的共享贴图会保留。同名且内容不同的依赖会阻止移动，并说明原因。
           </>
         ),
         confirmLabel: '移动',
@@ -694,7 +704,7 @@ export default function App(): JSX.Element {
           if (r.failed.length > 0) setToast(`移动了 ${r.moved} 个，${r.failed.length} 个失败：${r.failed[0]}`, 'error')
           else setToast(`已移动 ${r.moved} 个文件`)
           for (const e of targets) requested.current.delete(e.id)
-          // 移动改变了路径与 rel，重扫最省事；缩略图缓存按文件名+大小+时间命中，不会重新出图
+          // 移动改变了路径与 rel，重扫同步结果；资源位置改变后缩略图会重新生成
           void openFolder(root)
         }
       })
@@ -1625,7 +1635,7 @@ export default function App(): JSX.Element {
           onClose={() => setShowDupes(false)}
           onTrash={async (paths) => {
             const r = await window.api.trashModels(paths)
-            const gone = new Set(paths.map((p) => p.toLowerCase()))
+            const gone = new Set(r.removedPaths.map((p) => p.toLowerCase()))
             const ids = new Set((scan.entries ?? []).filter((e) => gone.has(e.path.toLowerCase())).map((e) => e.id))
             removeEntries(ids)
             void refreshLib()

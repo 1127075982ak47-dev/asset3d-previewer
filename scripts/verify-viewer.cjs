@@ -34,8 +34,9 @@ app.whenReady().then(async () => {
     return
   }
   const errors = []
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2 && !/Electron Security Warning/.test(message)) errors.push(message)
+  win.webContents.on('console-message', event => {
+    const { level, message } = event
+    if ((level === 'warning' || level === 'error') && !/Electron Security Warning/.test(message)) errors.push(message)
   })
   const js = (code) => win.webContents.executeJavaScript(code, true)
   const shot = async (name) => {

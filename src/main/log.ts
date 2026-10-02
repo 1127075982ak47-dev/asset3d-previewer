@@ -78,10 +78,13 @@ function rotate(): void {
 
 let lineCount = 0
 
-function write(level: Level, scope: string, msg: string, extra?: unknown): void {
+let consoleAvailable = true
+function write(level: Level, scope: string, msg: string, extra?: unknown, toConsole = true): void {
   const line = `${ts()} [${level.toUpperCase().padEnd(5)}] ${scope}: ${msg}${fmtExtra(extra)}`
   const con = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log
-  con(line)
+  if (consoleAvailable && toConsole) {
+    try { con(line) } catch { consoleAvailable = false }
+  }
   if (!file || level === 'debug') return
   try {
     // 每 200 行检查一次大小，别每行都 stat
@@ -103,10 +106,14 @@ export const log = {
 
 /** 主进程的最后一道网：未捕获异常只记录不退出，一个坏文件不该带崩整个程序 */
 export function installGlobalHandlers(): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', () => { consoleAvailable = false })
+  }
   process.on('uncaughtException', (err) => {
-    write('error', 'process', 'uncaughtException', err)
+    if ((err as NodeJS.ErrnoException).code === 'EPIPE') { consoleAvailable = false; return }
+    write('error', 'process', 'uncaughtException', err, false)
   })
   process.on('unhandledRejection', (reason) => {
-    write('error', 'process', 'unhandledRejection', reason)
+    write('error', 'process', 'unhandledRejection', reason, false)
   })
 }

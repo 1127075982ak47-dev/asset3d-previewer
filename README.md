@@ -187,7 +187,7 @@ Blender 的 `Preferences > Save & Load > File Preview Type` 有三种模式：
 ## 开发
 
 ```bash
-npm install
+npm run setup      # 锁定依赖安装 + Electron 下载及 SHA256 校验
 npm run dev
 ```
 
@@ -195,7 +195,7 @@ npm run dev
 npm run typecheck   # tsc
 npm test            # vitest 单元测试（纯逻辑模块）
 npm run pack        # 构建 + electron-builder，产物在 release/win-unpacked 和 release/*.zip
-npm run release     # typecheck + test + pack + 把绿色版 zip 和源码 zip 复制到上级目录
+npm run release     # typecheck + test + pack + 把绿色版、源码、完整 Git 开发包和 SHA256 清单复制到上级目录
 ```
 
 ### 验收脚本
@@ -285,6 +285,26 @@ three.js 里只有 PBR 材质吃 `scene.environment`，`MeshPhongMaterial` 收�
 白膜 / 法线 / 贴图通道等都是把 mesh 上的材质引用换成共享材质或克隆体，切回「材质」时把原引用放回去；
 剖切平面也只挂在当前生效的这批材质上，网格与阴影不受影响。
 
-**缓存键不含路径，改名不重出图。**
-缩略图按「文件名 + 大小 + 修改时间」索引，绿色版换盘符照样命中；重命名时把缓存搬到新键，
-相机角度 / 着色预设只在非默认值时才进键，升级后老缓存全部有效。
+**缓存包含位置和依赖修订。**
+不同目录的同名模型不会串图。外部贴图、bin、MTL 等修改后自动生成新缓存；
+重命名仍可迁移已有缩略图。换盘符后的缓存可以重建，收藏与标签独立保存。
+
+## v1.3 数据与文件整理
+
+设置 → 缓存与系统 → 备份资源库 / 导入备份。备份包含收藏、标签、评分和颜色，
+导入与当前记录合并。设置、资源库和窗口状态采用原子保存，并保留上一版 `.bak`。
+
+原格式导出与移动携带已识别依赖，使用复制校验与同名冲突检查；移动只删除源模型，
+共享贴图、bin、mtl 等仍保留在源目录。重命名不改变内部引用的依赖名称。
+引用父目录的资源应导出 GLB，或整体复制素材文件夹。
+非标准引用及部分私有格式的外部依赖无法完整识别，请使用资源管理器整体复制。
+批量回收站操作只移除实际成功的完整路径记录，失败的文件和资源库记录保留。
+
+主窗口与 worker 都启用隔离沙箱，worker 不具备文件整理 API。
+本地文件协议核对真实路径，阻止目录链接越出已打开的资源范围。
+
+升级时先关闭程序，将旧 `data` 文件夹复制到新版 exe 同级，再启动新版。
+资源库记录使用绝对路径；素材位置相同时可以直接沿用，换位置后旧路径不会自动关联。
+旧缩略图在 v1.3 会自动重建，无需删除收藏。
+
+开发交接见 `HANDOFF.md`；快速使用见 `docs/QUICKSTART.txt`；本轮验收见 `docs/RELEASE_VALIDATION.md`。

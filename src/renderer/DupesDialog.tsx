@@ -68,13 +68,17 @@ export default function DupesDialog({ entries, getThumbUrl, onClose, onTrash, on
   async function trash(): Promise<void> {
     setConfirm(false)
     setPhase('trashing')
-    const r = await onTrash([...checked])
-    setResult(r)
-    // 删掉的从列表里去掉，剩一个的组也没必要再显示
-    const gone = new Set([...checked])
-    setGroups((gs) => gs.map((g) => ({ ...g, paths: g.paths.filter((p) => !gone.has(p)) })).filter((g) => g.paths.length > 1))
-    setChecked(new Set())
-    setPhase('trashed')
+    try {
+      const r = await onTrash([...checked])
+      setResult(r)
+      const gone = new Set(r.removedPaths)
+      setGroups((gs) => gs.map((g) => ({ ...g, paths: g.paths.filter((p) => !gone.has(p)) })).filter((g) => g.paths.length > 1))
+      setChecked(prev => new Set([...prev].filter(p => !gone.has(p))))
+    } catch (err) {
+      setResult({ ok: false, done: 0, removedPaths: [], failed: [err instanceof Error ? err.message : String(err)] })
+    } finally {
+      setPhase('trashed')
+    }
   }
 
   return (
@@ -160,7 +164,7 @@ export default function DupesDialog({ entries, getThumbUrl, onClose, onTrash, on
               <button onClick={() => setChecked(new Set())}>清空勾选</button>
               <button
                 disabled={checked.size === 0}
-                onClick={() => void onTag([...checked], '重复').then(() => setResult({ ok: true, done: 0, failed: [] }))}
+                onClick={() => void onTag([...checked], '重复').then(() => setResult({ ok: true, done: 0, failed: [], removedPaths: [] }))}
                 title="给勾选的文件加上「重复」标签，之后再决定"
               >
                 打标签「重复」

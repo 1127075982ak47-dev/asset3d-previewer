@@ -270,7 +270,7 @@ async function runBatch(batch: PendingJob[]): Promise<void> {
     // 用出厂配置启动能把这类随机失败挡掉。
     child = spawn(
       blender.exe,
-      ['-b', '--factory-startup', '-P', resourcePath('blender_export_glb.py'), '--', jobsFile],
+      ['-b', '--factory-startup', '--disable-autoexec', '-P', resourcePath('blender_export_glb.py'), '--', jobsFile],
       { windowsHide: true }
     )
     log.info('blender', `批转换 ${batch.length} 个文件 (Blender ${blender.version})`)
@@ -437,8 +437,8 @@ export async function openInBlender(
   const install = await pickBlenderFor(filePath, userPath)
   if (!install) return { ok: false, error: '未检测到 Blender 安装' }
   const args = filePath.toLowerCase().endsWith('.blend')
-    ? [filePath]
-    : ['--python', resourcePath('blender_import.py'), '--', filePath]
+    ? ['--disable-autoexec', filePath]
+    : ['--disable-autoexec', '--python', resourcePath('blender_import.py'), '--', filePath]
   try {
     // detached + unref：让 Blender 独立活着，关掉预览器不会把它一起带走
     const child = spawn(install.exe, args, { detached: true, stdio: 'ignore' })

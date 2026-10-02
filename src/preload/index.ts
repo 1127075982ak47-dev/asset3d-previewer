@@ -82,6 +82,9 @@ const api = {
 
   /* ---- 收藏与标签 ---- */
   library: (): Promise<LibraryPayload> => ipcRenderer.invoke('library:get'),
+  backupLibrary: (): Promise<string | null> => ipcRenderer.invoke('library:backup'),
+  restoreLibrary: (): Promise<boolean | null> => ipcRenderer.invoke('library:restore'),
+  onLibraryChanged: (cb: (lib: LibraryPayload) => void): (() => void) => on('library:changed', cb),
   toggleFavorite: (p: string): Promise<boolean> =>
     ipcRenderer.invoke('library:toggleFavorite', p),
   setFavorites: (paths: string[], value: boolean): Promise<string[]> =>
@@ -152,6 +155,7 @@ const api = {
   onOpenFolder: (cb: (dir: string) => void): (() => void) => on('app:openFolder', cb),
   onMenuAction: (cb: (action: MenuAction) => void): (() => void) => on('menu:action', cb),
   onFolderChanged: (cb: (root: string) => void): (() => void) => on('folder:changed', cb),
+  onNotice: (cb: (message: string) => void): (() => void) => on('app:notice', cb),
 
   appInfo: (): Promise<AppInfo> => ipcRenderer.invoke('app:info'),
 
@@ -202,8 +206,12 @@ const workerApi = {
   }): void => ipcRenderer.send('worker:result', payload)
 }
 
-contextBridge.exposeInMainWorld('api', api)
-contextBridge.exposeInMainWorld('workerApi', workerApi)
+if (process.argv.includes('--asset3d-worker')) {
+  contextBridge.exposeInMainWorld('api', { decoderUrl: api.decoderUrl })
+  contextBridge.exposeInMainWorld('workerApi', workerApi)
+} else {
+  contextBridge.exposeInMainWorld('api', api)
+}
 
 export type Api = typeof api
 export type WorkerApi = typeof workerApi

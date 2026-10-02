@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { cacheDir } from './cache'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/types'
+import { readJsonRecover, writeJsonAtomic } from './jsonStore'
 
 let current: AppSettings | null = null
 
@@ -74,8 +75,7 @@ export function getSettings(): AppSettings {
   if (current) return current
   let loaded: AppSettings
   try {
-    const raw = fs.readFileSync(file(), 'utf8')
-    loaded = sanitizeSettings(JSON.parse(raw))
+    loaded = sanitizeSettings(readJsonRecover(file(), () => ({})))
   } catch {
     loaded = { ...DEFAULT_SETTINGS }
   }
@@ -85,19 +85,19 @@ export function getSettings(): AppSettings {
 
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const next = sanitizeSettings({ ...getSettings(), ...patch })
-  current = next
   try {
-    fs.writeFileSync(file(), JSON.stringify(next, null, 2), 'utf8')
-  } catch {
-    // 只读介质上跑绿色版时写不了配置，不该因此崩溃
+    writeJsonAtomic(file(), next)
+  } catch (err) {
+    throw new Error(`设置未能保存：${err instanceof Error ? err.message : String(err)}`)
   }
+  current = next
   return next
 }
 
 /** 最近打开过的文件夹，方便下次一键回到上次的素材库 */
 export function getRecentFolders(): string[] {
   try {
-    const list = JSON.parse(fs.readFileSync(path.join(cacheDir(), 'recent.json'), 'utf8'))
+    const list = readJsonRecover<unknown>(path.join(cacheDir(), 'recent.json'), () => [])
     return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : []
   } catch {
     return []
@@ -106,11 +106,7 @@ export function getRecentFolders(): string[] {
 
 function writeRecent(list: string[]): void {
   try {
-    fs.writeFileSync(
-      path.join(cacheDir(), 'recent.json'),
-      JSON.stringify(list, null, 2),
-      'utf8'
-    )
+    writeJsonAtomic(path.join(cacheDir(), 'recent.json'), list)
   } catch {
     /* 忽略 */
   }

@@ -33,6 +33,7 @@ export default function Settings({ settings, blender, onClose, onSave, onBlender
   const [busy, setBusy] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [section, setSection] = useState<Section>('thumb')
+  const [dataMessage, setDataMessage] = useState('')
   useEscape(onClose)
 
   useEffect(() => {
@@ -49,9 +50,10 @@ export default function Settings({ settings, blender, onClose, onSave, onBlender
     for (const k of Object.keys(local) as (keyof AppSettings)[]) {
       if (local[k] !== settings[k]) (diff as Record<string, unknown>)[k] = local[k]
     }
-    await onSave(diff)
-    setBusy(false)
-    onClose()
+    try {
+      await onSave(diff)
+      onClose()
+    } finally { setBusy(false) }
   }
 
   const note = (text: string): JSX.Element => <span className="hint">{text}</span>
@@ -273,6 +275,20 @@ export default function Settings({ settings, blender, onClose, onSave, onBlender
             {section === 'system' && (
               <>
                 <div className="field">
+                  <label>收藏、标签与评分</label>
+                  <div className="ctl">
+                    <button disabled={busy} onClick={() => {
+                      setBusy(true)
+                      void window.api.backupLibrary().then(p => { if (p) setDataMessage(`备份已保存：${p}`) }).finally(() => setBusy(false))
+                    }}>备份资源库</button>
+                    <button disabled={busy} onClick={() => {
+                      setBusy(true)
+                      void window.api.restoreLibrary().then(ok => { if (ok) setDataMessage('备份已合并到资源库') }).finally(() => setBusy(false))
+                    }}>导入备份</button>
+                  </div>
+                </div>
+                {dataMessage && <p className="note wrap" role="status">{dataMessage}</p>}
+                <div className="field">
                   <label>缓存上限</label>
                   <div className="ctl">
                     <select value={local.cacheLimitMB} onChange={(e) => patch({ cacheLimitMB: Number(e.target.value) })}>
@@ -306,7 +322,7 @@ export default function Settings({ settings, blender, onClose, onSave, onBlender
                             void window.api.clearCache().then(async () => {
                               setCache(await window.api.cacheInfo())
                               setBusy(false)
-                            })
+                            }).finally(() => setBusy(false))
                           }}
                           disabled={busy}
                         >

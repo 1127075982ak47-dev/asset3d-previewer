@@ -187,13 +187,15 @@ app.whenReady().then(async () => {
     height: 640,
     webPreferences: {
       preload: path.join(APP_ROOT, 'out', 'preload', 'index.js'),
-      sandbox: false,
+      sandbox: true,
+      additionalArguments: ['--asset3d-worker'],
       backgroundThrottling: false
     }
   })
 
-  win.webContents.on('console-message', (_e, level, message) => {
-    if (level >= 2) console.log('  [worker]', message)
+  win.webContents.on('console-message', event => {
+    const { level, message } = event
+    if ((level === 'warning' || level === 'error')) console.log('  [worker]', message)
   })
 
   await new Promise((resolve) => {

@@ -19,3 +19,6 @@ release/
 .verify-lib/
 .verify-lib-data/
 .verify-out-fixtures/
+
+.verify-product*/
+.verify-reports/
