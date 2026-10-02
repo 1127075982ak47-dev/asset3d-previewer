@@ -1,4 +1,34 @@
-# 3D 资源预览器（绿色版）
+# 3D 资源预览器 · Asset3D Previewer
+
+[![Windows CI](https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml/badge.svg)](https://github.com/1127075982ak47-dev/asset3d-previewer/actions/workflows/ci.yml)
+
+**免费开源的 Windows 3D 素材浏览器。中文界面、本地离线、解压即用。**
+
+[下载最新版](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/latest) · [快速使用](docs/QUICKSTART.txt) · [开发交接](HANDOFF.md) · [更新日志](CHANGELOG.md) · [反馈问题](https://github.com/1127075982ak47-dev/asset3d-previewer/issues)
+
+A free, open-source, offline 3D asset browser and viewer for Windows, built with Electron, React and three.js.
+
+![3D 查看器：材质、白膜、贴图通道、平滑/平直和 AO](docs/images/viewer.png)
+
+## 下载安装
+
+1. 打开 [Releases 下载页](https://github.com/1127075982ak47-dev/asset3d-previewer/releases/latest)。
+2. 普通用户下载带 `win64-绿色版.zip` 的附件，完整解压后双击 `3D资源预览器.exe`。
+3. 按 Ctrl+O 选择模型文件夹，双击缩略图进入查看器，按 Esc 返回。
+
+运行环境：Windows 10/11 x64。不需要安装 Node.js；`.blend` 交互预览和转换需要另外安装兼容版本的 Blender。
+发布附件的 SHA256 见同页发布清单。源码和完整 Git 开发包也在 Releases 中。
+
+## 主要功能
+
+- 批量扫描、虚拟化网格/列表、搜索与筛选、可见素材优先出图。
+- 白膜、雕塑、法线、UV、线框、透视、平滑/平直、AO 与阴影。
+- 内置 HDRI、自定义 HDR/EXR 环境、背景显示开关、曝光与色调映射。
+- 动画、材质变体、剖切、两点测量、贴图通道、结构检查与 A/B 对比。
+- 收藏、标签、评分、颜色、重复文件查找、回收站和资源库备份。
+- GLB/原格式导出、截图、转盘 PNG 序列、接触表和 CSV 清单。
+
+查看器打开时暂停后台缩略图，静止场景按需绘制；GPU 硬件加速默认开启。
 
 批量预览 3D 素材的桌面工具。指向一个文件夹，立刻得到一墙可辨认的 3D 缩略图；
 双击任意一个即可全屏放大、拖拽旋转、切换白膜 / 线框 / 法线等显示模式、换 HDRI 环境光，
@@ -308,3 +338,18 @@ three.js 里只有 PBR 材质吃 `scene.environment`，`MeshPhongMaterial` 收�
 旧缩略图在 v1.3 会自动重建，无需删除收藏。
 
 开发交接见 `HANDOFF.md`；快速使用见 `docs/QUICKSTART.txt`；本轮验收见 `docs/RELEASE_VALIDATION.md`。
+
+## 参与项目
+
+欢迎提交问题、最小复现样例、格式兼容改进和 Pull Request。开发流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，社区约定见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，安全问题见 [SECURITY.md](SECURITY.md)。
+
+项目本体保持免费、中文、本地离线，不加入收费、会员、账号或遥测。
+
+## 许可与致谢
+
+- 项目采用 [MIT 许可](LICENSE)。
+- 内置 HDRI 来自 [Poly Haven](https://polyhaven.com)，采用 CC0。
+- 截图中的示例模型来自 [Kenney Nature Kit](https://kenney.nl/assets/nature-kit)，采用 CC0；示例模型不随程序分发。
+- Electron、React、three.js、DRACO、Basis Universal、rhino3dm 等组件保留各自许可，见 [第三方许可说明](docs/THIRD_PARTY_NOTICES.txt)。
+
+GitHub 公开历史经过整理，本机路径、内部会话笔记、测试输出和私人提交邮箱已清理。

@@ -1,0 +1,24 @@
+name: 功能建议
+description: 提出新的格式、查看器、整理或交互需求
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与问题
+      description: 目前哪个步骤影响你的使用？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的功能
+      description: 描述你希望如何操作、得到什么结果。
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: 示例或参考
+      description: 可选；格式样例、截图或参考工具。

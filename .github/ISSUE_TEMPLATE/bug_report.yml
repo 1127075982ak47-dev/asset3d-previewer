@@ -1,0 +1,31 @@
+name: 问题反馈
+description: 报告预览、文件整理、性能或运行问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本
+      placeholder: v1.3.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows 版本、GPU/驱动、是否启用 GPU 加速、Blender 版本（如涉及）
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 文件格式、操作步骤、预期效果和实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图、最小样例或日志
+      description: 可选；请使用有权公开分享的最小样例，并移除私人路径和数据。
